@@ -13,7 +13,11 @@
 # NumPy removed in 2.0. xgboost is pinned for the same reason as the backend --
 # it is the version the committed model artifact was built and verified against.
 
-streamlit>=1.40
+# Streamlit is pinned exactly, not floored. Community Cloud will otherwise
+# silently upgrade it on its own schedule, which can change widget behaviour or
+# a layout between deploys -- the wrong time to discover it mid-refactor. Bump
+# this deliberately, alongside a local run of `streamlit run app.py`.
+streamlit==1.64.0
 pandas>=2.2,<3
 numpy>=1.26,<2
 xgboost==2.0.3

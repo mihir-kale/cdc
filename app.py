@@ -42,6 +42,129 @@ COMPARISON_TEXT = {
 
 MAX_RESULTS = 25
 
+# Session-state key for the lender picker. Declared here because the candidate
+# list is rebuilt on every keystroke, and the widget's stored value has to be
+# reconciled against it before the widget is created.
+LENDER_PICK_KEY = "fp_lender_choice"
+
+# Report-card styling. One hue, six steps: the shade tracks the band and the
+# letter carries the meaning. Deliberately not red/green -- the CFPB has not
+# classified any lender as safe or unsafe, so a traffic light would assert
+# something the data cannot support. Detail is hidden until hover so the card
+# reads as five grades at a glance.
+REPORT_CARD_CSS = """
+<style>
+.fp-card-head{display:flex;align-items:baseline;justify-content:space-between;
+  gap:1rem;flex-wrap:wrap;margin:.25rem 0 .1rem}
+.fp-card-name{font-size:1.45rem;font-weight:700;color:#111827;letter-spacing:-.01em}
+.fp-card-meta{font-size:.8rem;color:#6b7280;white-space:nowrap}
+.fp-row{display:flex;align-items:center;gap:.75rem;padding:.45rem 0;
+  border-bottom:1px solid #f3f4f6;font-size:.82rem;color:#6b7280}
+.fp-row:last-of-type{border-bottom:none}
+.fp-evidence{flex:1 1 auto;min-width:0}
+.fp-bar{flex:0 0 34%;height:.4rem;background:#f3f4f6;border-radius:999px;overflow:hidden}
+.fp-bar span{display:block;height:100%;background:#6366f1;border-radius:999px}
+.fp-tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:.6rem;margin:.9rem 0 .2rem;align-items:start}
+.fp-tile{border:1px solid #e5e7eb;border-radius:.6rem;padding:.85rem .4rem .7rem;
+  text-align:center;background:#fff;transition:border-color .12s,box-shadow .12s}
+.fp-tile:hover{border-color:#6366f1;box-shadow:0 1px 8px rgba(79,70,229,.14)}
+.fp-tile-name{font-size:.63rem;line-height:1.25;color:#6b7280;margin-top:.45rem;
+  text-transform:uppercase;letter-spacing:.04em}
+.fp-letter{font-size:2.1rem;line-height:1;font-weight:700}
+.fp-what{font-size:.68rem;line-height:1.3;margin-top:.3rem;min-height:2.4em}
+.fp-detail{visibility:hidden;opacity:0;max-height:0;overflow:hidden;
+  transition:opacity .12s;margin-top:.5rem;padding-top:.5rem;
+  border-top:1px dashed #e5e7eb;font-size:.68rem;line-height:1.45;color:#4b5563;
+  text-align:left}
+/* :focus mirrors :hover so the numbers are reachable by keyboard and by tap.
+   Hover alone would hide them from anyone on a phone, or anyone tabbing. */
+.fp-tile:hover .fp-detail,.fp-tile:focus .fp-detail,
+.fp-tile:focus-within .fp-detail{visibility:visible;opacity:1;max-height:14rem}
+.fp-tile:hover .fp-what,.fp-tile:focus .fp-what{visibility:hidden}
+.fp-tile:focus{outline:2px solid #6366f1;outline-offset:2px}
+.fp-k{color:#9ca3af}
+.fp-foot{margin-top:.9rem;padding-top:.7rem;border-top:1px solid #e5e7eb;
+  font-size:.72rem;color:#6b7280;line-height:1.5}
+</style>
+"""
+
+# Shade per band, light for the weakest. Paired with a readable text colour so
+# the letter keeps its contrast on the lighter steps.
+BAND_SHADE = {
+    "A": ("#e0e7ff", "#3730a3"),
+    "B": ("#c7d2fe", "#3730a3"),
+    "C": ("#eef2ff", "#4338ca"),
+    "D": ("#e0e7ff", "#4338ca"),
+    "E": ("#f5f3ff", "#4f46e5"),
+    "F": ("#faf5ff", "#5b21b6"),
+}
+
+
+def _esc(text: str) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def render_report_card(label: dict) -> None:
+    """Five grades at a glance; per-grade numbers on hover."""
+    st.markdown(REPORT_CARD_CSS, unsafe_allow_html=True)
+
+    tiles = []
+    for slug, dim in label["dimensions"].items():
+        letter, descriptor = grade_for(dim["score"])
+        bg, fg = BAND_SHADE[letter]
+        comparison = COMPARISON_TEXT[dim["comparison"]]
+        detail = (
+            f'<div class="fp-detail">'
+            f'<span class="fp-k">Score</span> {dim["score"]:.1f} of 100'
+            f' &middot; peer reference 50<br>'
+            f'<span class="fp-k">Complaints</span> {dim["complaints"]:,}<br>'
+            f'<span class="fp-k">Estimated rate</span> {dim["prevalence"] * 100:.1f}%'
+            f' <span class="fp-k">(90% credible interval</span> '
+            f'{dim["prevalence_lo90"] * 100:.1f}&ndash;{dim["prevalence_hi90"] * 100:.1f}%<span class="fp-k">)</span><br>'
+            f'<span class="fp-k">vs peers</span> {_esc(comparison)}'
+            f"</div>"
+        )
+        tiles.append(
+            f'<div class="fp-tile" tabindex="0" '
+            f'aria-label="{_esc(dim["label"])}: grade {letter}, {_esc(descriptor)}" '
+            f'title="{_esc(comparison)}">'
+            f'<div class="fp-letter" style="color:{fg}">{letter}</div>'
+            f'<div class="fp-tile-name">{_esc(dim["label"])}</div>'
+            f'<div class="fp-what">{_esc(descriptor)}</div>'
+            f"{detail}</div>"
+        )
+
+    rows = []
+    for dim in label["dimensions"].values():
+        pct = min(100.0, max(0.0, dim["score"]))
+        rows.append(
+            f'<div class="fp-row"><span class="fp-evidence">'
+            f'{_esc(COMPARISON_TEXT[dim["comparison"]])}</span>'
+            f'<span class="fp-bar"><span style="width:{pct:.0f}%"></span></span></div>'
+        )
+
+    st.markdown(
+        f'<div class="fp-card-head">'
+        f'<span class="fp-card-name">{_esc(label["name"])}</span>'
+        f'<span class="fp-card-meta">{label["n_complaints"]:,} CFPB payday complaints'
+        f' &middot; {_esc(label["evidence"])}</span></div>'
+        f'<div class="fp-tiles">{"".join(tiles)}</div>'
+        f'<div>{"".join(rows)}</div>'
+        f'<div class="fp-foot">Grades are per dimension, and there is no overall grade: '
+        f'the five overlap, so one number would hide that. Each letter is a band on a '
+        f'shrunk estimate relative to modeled peers, not a verdict &mdash; the CFPB has '
+        f'classified no lender as safe or unsafe. Hover a tile for its numbers.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
 
 def grade_for(score: float) -> tuple[str, str]:
     """Return (letter, descriptor) for a 0-100 score. Out-of-range is clamped."""
@@ -71,80 +194,78 @@ lender_tab, household_tab, calculator_tab = st.tabs(
 # ---------------------------------------------------------------- LENDER
 with lender_tab:
     st.header("Payday Loan Safety Label")
-    st.write(
-        "How does a lender\u2019s CFPB complaint profile compare with modeled payday-loan peers?"
+    st.caption(
+        "Each dimension compares this lender\u2019s CFPB complaint pattern with modeled "
+        "payday-loan peers. Hover a grade for the numbers behind it."
     )
 
     summary = dataset_summary()
-    st.caption(
-        f"Method {summary['method']} \u00b7 {summary['lender_count']:,} lenders \u00b7 {summary['total_complaints']:,} complaints in this dataset"
-    )
+    all_lenders = lender_index()
+    total = len(all_lenders)
 
-    query = st.text_input("Search lenders by name", placeholder="Start typing a name\u2026")
-    index = lender_index()
-    if query.strip():
-        needle = query.strip().lower()
-        index = [row for row in index if needle in row["name"].lower()]
-    else:
-        index = index[:MAX_RESULTS]
+    search_col, sort_col = st.columns([3, 1])
+    with search_col:
+        query = st.text_input(
+            f"Search {total} lenders",
+            placeholder="Start typing a lender name\u2026",
+            label_visibility="collapsed",
+        )
+    with sort_col:
+        order = st.selectbox(
+            "Order",
+            ["Most complaints", "Name (A\u2013Z)", "Fewest complaints"],
+            label_visibility="collapsed",
+        )
 
-    if not index:
-        st.info("No lender matches that name.")
+    needle = query.strip().lower()
+    if needle:
+        matches = [r for r in all_lenders if needle in r["name"].lower()]
     else:
-        if not query.strip():
+        matches = list(all_lenders)
+
+    if order == "Name (A\u2013Z)":
+        matches.sort(key=lambda r: r["name"].lower())
+    elif order == "Fewest complaints":
+        matches.sort(key=lambda r: r["n_complaints"])
+    else:
+        matches.sort(key=lambda r: -r["n_complaints"])
+
+    if not matches:
+        st.info(f"No lender matches \u201c{query.strip()}\u201d. Try a shorter fragment.")
+    else:
+        shown = matches[:MAX_RESULTS]
+        if not needle:
             st.caption(
-                f"Showing the first {len(index)} of {len(lender_index()):,}. Type to narrow the list."
+                f"Suggested: the {len(shown)} most-complained of {total}. "
+                "Type to search all of them."
             )
-        by_name = {row["name"]: row for row in index}
-        chosen = st.selectbox(
-            "Lender",
-            list(by_name),
-            format_func=lambda n: f"{n}  —  {by_name[n]['n_complaints']:,} complaints",
-        )
-        label = get_lender(by_name[chosen]["id"])
+        elif len(matches) > len(shown):
+            st.caption(f"Showing {len(shown)} of {len(matches):,} matches. Keep typing to narrow.")
 
-        st.subheader(chosen)
-        st.caption(label["methodology"]["direction"])
+        # A list of clickable rows rather than a selectbox. The candidate set
+        # changes on every keystroke and every sort change, and a selectbox
+        # whose stored value falls out of its own options raises and is left
+        # dead -- which is what made the list look like it stopped populating.
+        # Buttons carry stable keys, so the selection survives any reordering,
+        # and the suggestions are visible instead of hidden in a dropdown.
+        picked = st.session_state.get(LENDER_PICK_KEY)
+        if picked is None:
+            picked = shown[0]["id"]
+            st.session_state[LENDER_PICK_KEY] = picked
 
-        ev1, ev2, ev3 = st.columns(3)
-        with ev1:
-            st.metric("CFPB complaints", f"{label['n_complaints']:,}")
-        with ev2:
-            st.metric("Evidence strength", label["evidence"])
-        with ev3:
-            st.metric("Dimensions scored", str(len(label["dimensions"])))
+        with st.container(height=340):
+            for row in shown:
+                if st.button(
+                    f"{row['name']}   ·   {row['n_complaints']:,} complaints",
+                    key=f"{LENDER_PICK_KEY}_{row['id']}",
+                    width="stretch",
+                    type="primary" if row["id"] == picked else "secondary",
+                ):
+                    st.session_state[LENDER_PICK_KEY] = row["id"]
+                    picked = row["id"]
+                    st.rerun()
 
-        st.caption(
-            "Evidence strength describes how much complaint data supports the grades below, not how good or bad the lender is. More complaints usually means more customers, not more misconduct."
-        )
-
-        for slug, dim in label["dimensions"].items():
-            letter, descriptor = grade_for(dim["score"])
-            grade_col, text_col = st.columns([1, 4])
-            with grade_col:
-                st.metric(dim["label"], letter)
-                st.caption(descriptor)
-            with text_col:
-                st.caption(dim["summary"])
-                st.progress(min(100.0, max(0.0, dim["score"])) / 100.0)
-                st.caption(
-                    f"{COMPARISON_TEXT[dim['comparison']]} \u2014 "
-                    f"{dim['complaints']:,} complaints, estimated rate "
-                    f"{dim['prevalence'] * 100:.1f}% "
-                    f"(90% credible interval "
-                    f"{dim['prevalence_lo90'] * 100:.1f}\u2013{dim['prevalence_hi90'] * 100:.1f}%)"
-                )
-
-        st.divider()
-        st.caption(
-            "Grades are per dimension on purpose. There is no overall grade, because the five dimensions overlap and combining them would hide that. Each letter is a band on a shrunk, peer-relative estimate, not a verdict about the lender."
-        )
-
-        with st.expander("How this is calculated"):
-            st.write(label["methodology"]["summary"])
-            for caveat in label["methodology"]["caveats"]:
-                st.caption(f"\u2022 {caveat}")
-            st.caption(f"Method: {label['method']}")
+        render_report_card(get_lender(picked))
 
 # ------------------------------------------------------------- HOUSEHOLD
 with household_tab:
