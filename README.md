@@ -416,9 +416,13 @@ Nothing in the service depends on a developer's machine: both artifacts are
 resolved relative to `app/generated/` via `__file__`, and `wellbeing.csv` is
 needed only for training.
 
-**First deploy to watch:** xgboost's Linux wheel links against the system
-OpenMP runtime (`libgomp.so.1`). Most Render images have it; if the service
-fails to import xgboost, add this to `buildCommand` in `render.yaml`:
+**One deploy risk, and it is smaller than it looks.** xgboost's manylinux wheel
+bundles its own OpenMP runtime (`xgboost.libs/libgomp-d22c30c5.so.1.0.0`), so it
+does not need a system `libgomp1`. Verified by installing xgboost 2.0.3 into a
+bare `python:3.12-slim` image with no `libgomp1` package present: it imports and
+`ldd` resolves the bundled copy. Since Render builds on Ubuntu x86-64 and gets
+the same wheel, `render.yaml` needs no extra apt step. If the service somehow
+fails to import xgboost, this is the fix:
 
 ```
 apt-get update && apt-get install -y libgomp1 && pip install --no-cache-dir -r requirements.txt
