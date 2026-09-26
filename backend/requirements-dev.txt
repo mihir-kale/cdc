@@ -1,0 +1,13 @@
+-r requirements-test.txt
+
+# Notebook and plotting work only. Not needed to run the service or its tests.
+#
+#   python -m app.train_financial_impact   -> app/generated/financial_impact_*
+#   python -m app.safety_labels            -> app/generated/lender_safety_labels.json
+#
+# Note that app/financial_impact.py deliberately does NOT import scikit-learn.
+# Training goes through model.get_booster().save_model() and inference through
+# xgboost.Booster, which sidesteps the sklearn 1.6/1.9 tag-system breakage that
+# makes XGBClassifier.save_model/load_model fail in both directions.
+matplotlib>=3.9
+jupyter>=1.1

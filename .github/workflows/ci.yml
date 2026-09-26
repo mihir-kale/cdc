@@ -1,0 +1,88 @@
+name: CI
+
+# Fast checks only. Deliberately does not run the CFPB narrative pipeline or
+# retrain the financial impact model from scratch on every push: the committed
+# artifacts are what the service actually serves, and the suite verifies them.
+# Retraining reproducibility is covered in-process by a test instead.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # 3.12 is what the model artifact was built and verified against.
+          # numpy<2 is pinned in requirements.txt because xgboost 2.0.3 still
+          # calls the removed np.NaN.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-test.txt
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s ../tests -v
+
+      - name: Verify the service imports and artifacts load
+        run: |
+          python -c "
+          from app.main import app
+          from app import financial_impact, label_store
+          label_store.load_artifact()
+          assert financial_impact.model_artifact_loaded()
+          print('artifacts load OK')
+          "
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Production build
+        run: npm run build
+        env:
+          # A placeholder so the build never silently falls back to localhost.
+          # The real value is supplied by Vercel at build time.
+          NEXT_PUBLIC_API_URL: https://api.example.invalid

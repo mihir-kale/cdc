@@ -1,12 +1,27 @@
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-.env
-.DS_Store
-node_modules/
+.ipynb_checkpoints/
 
-# Pipeline inputs and outputs: multi-GB source CSV, DuckDB cache, generated data
-data/
-*.duckdb
-*.duckdb.wal
+# Node
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# Data (datasets are large; fetch them with a script, don't commit them)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/raw/README.md
+!data/processed/.gitkeep
+
+# OS
+.DS_Store
