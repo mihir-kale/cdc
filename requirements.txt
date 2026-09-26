@@ -12,6 +12,20 @@
 # preference: xgboost 2.0.3's categorical encoder still calls np.NaN, which
 # NumPy removed in 2.0. xgboost is pinned for the same reason as the backend --
 # it is the version the committed model artifact was built and verified against.
+#
+# DEPLOY ON PYTHON 3.12. This is not a preference, and Community Cloud cannot
+# change it after the fact -- switching means deleting the app and redeploying.
+#
+# No numpy release below 2.0 ships a cp313 wheel (1.26.4, the last of them, tops
+# out at cp312), so on 3.13 pip finds no candidate and silently falls back to
+# building numpy from source. That takes tens of minutes and then usually fails,
+# which looks like a hung deploy rather than a version problem. The environment
+# marker below makes it fail in seconds and name numpy, instead of hanging.
+#
+# Moving to 3.13+ properly means numpy 2.x, which means dropping xgboost 2.0.3
+# for a release that supports numpy 2, which breaks the byte-reproducibility the
+# committed artifacts and tests/test_financial_impact.py depend on. render.yaml
+# pins PYTHON_VERSION 3.12.4 for exactly this reason.
 
 # Streamlit is pinned exactly, not floored. Community Cloud will otherwise
 # silently upgrade it on its own schedule, which can change widget behaviour or
@@ -19,5 +33,5 @@
 # this deliberately, alongside a local run of `streamlit run app.py`.
 streamlit==1.64.0
 pandas>=2.2,<3
-numpy>=1.26,<2
+numpy>=1.26,<2; python_version < "3.13"
 xgboost==2.0.3
