@@ -7,3 +7,5 @@ st.set_page_config(
     page_icon=":clapper:", 
     layout="wide"
     )
+
+st.title("PayWatch")
