@@ -47,8 +47,8 @@ without running any data pipeline or training:
 ├── frontend/            Next.js + TypeScript + Tailwind app
 │   └── src/
 │       ├── app/         App Router pages and layout
-│       ├── components/  LenderSearch, SafetyLabel, FinancialContext
-│       └── lib/         API client and shared types
+│       ├── components/  ProductTabs, LenderSearch, SafetyLabel, FinancialContext
+│       └── lib/         API client, shared types, A–F grade bands
 ├── backend/             FastAPI service
 │   ├── app/
 │   │   ├── main.py                    App definition and routes
@@ -99,10 +99,23 @@ payday peers. The method was selected and validated in
 `notebooks/cfpb_dimension_scoring.ipynb`; the dependence structure is documented
 in `notebooks/cfpb_dimension_dependence.ipynb`.
 
-There is deliberately **no overall score, grade or rank**. The five dimensions
-overlap, so a single number would hide that, and empirical-Bayes shrinkage means
-a lender with few complaints is reported near the middle rather than at an
-extreme.
+The score stays 0–100 everywhere it is stored, served and tested. The UI is the
+only place it is banded: each dimension is shown as a per-dimension **A–F** grade
+instead of the number, using the peer-anchored cuts in `frontend/src/lib/grades.ts`.
+Method C puts a typical peer at exactly 50, so 50 is the C/D boundary; the other
+cuts sit in gaps in the observed distribution rather than at even intervals.
+Across all 2,410 dimension-scores that yields A 18.3%, B 17.6%, C 34.7%, D 3.2%,
+E 5.8%, F 20.4%. Evenly spaced cuts would have been actively misleading — they
+put 72.9% of every dimension in F while the model calls 91% of them
+indistinguishable from peers. The bands are relative: an F means "materially less
+favorable than modeled peers", not "unsafe". The CFPB has classified no lender
+either way, which is why the grades render in a single hue rather than the
+red/green a letter scale conventionally implies.
+
+There is deliberately **no overall score, grade or rank**, and the per-dimension
+grade does not change that. The five dimensions overlap, so a single letter for
+the lender would hide that, and empirical-Bayes shrinkage means a lender with few
+complaints is reported near the middle rather than at an extreme.
 
 ### Regenerating the label data
 
@@ -171,9 +184,15 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. The homepage has two sections: **About the
-lender** (search and safety label) and **Household Financial Context**. Start the
-backend first or the search list will show a connection error.
+Open <http://localhost:3000>. The homepage is a two-tab product switcher:
+**Lender safety label** (search and safety label) and **Household financial
+context**. Each product gets its own tab because it answers a different question
+from a different dataset and unit of analysis — one describes a lender, the other
+describes a household, and nothing combines them. Sharing a scrolling page made
+the two read as one verdict about one borrower. The tabs are a real ARIA tablist
+(arrow keys, Home/End) and both panels stay mounted, so a half-typed search or a
+filled-in household profile survives a tab switch. Start the backend first or the
+search list will show a connection error.
 
 | Variable              | Default                 | Purpose          |
 | --------------------- | ----------------------- | ---------------- |

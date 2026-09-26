@@ -1,5 +1,6 @@
 import LenderSearch from "@/components/LenderSearch";
 import FinancialContext from "@/components/FinancialContext";
+import ProductTabs from "@/components/ProductTabs";
 
 export default function Home() {
   return (
@@ -11,27 +12,51 @@ export default function Home() {
         </p>
       </header>
 
-      <section aria-labelledby="lender-safety-heading" className="flex flex-col gap-4">
-        <div>
-          <h2
-            id="lender-safety-heading"
-            className="text-sm font-medium tracking-wide text-gray-500 uppercase"
-          >
-            About the lender
-          </h2>
-          <p className="mt-1 text-sm text-gray-600">
-            How does this lender&rsquo;s CFPB complaint profile compare with modeled
-            payday-loan peers?
-          </p>
-        </div>
-        <LenderSearch />
-      </section>
-
-      <hr className="border-gray-200" />
-
-      <section aria-labelledby="household-context-heading">
-        <FinancialContext />
-      </section>
+      <ProductTabs
+        tabs={[
+          {
+            id: "safety-label",
+            label: "Lender safety label",
+            content: (
+              <section aria-labelledby="lender-safety-heading" className="flex flex-col gap-4">
+                <div>
+                  <h2
+                    id="lender-safety-heading"
+                    className="text-sm font-medium tracking-wide text-gray-500 uppercase"
+                  >
+                    About the lender
+                  </h2>
+                  <p className="mt-1 text-sm text-gray-600">
+                    How does this lender&rsquo;s CFPB complaint profile compare with
+                    modeled payday-loan peers?
+                  </p>
+                </div>
+                <LenderSearch />
+              </section>
+            ),
+          },
+          {
+            id: "household-context",
+            label: "Household financial context",
+            content: (
+              <section aria-labelledby="household-context-heading" className="flex flex-col gap-4">
+                <div>
+                  <h2
+                    id="household-context-heading"
+                    className="text-sm font-medium tracking-wide text-gray-500 uppercase"
+                  >
+                    About the household
+                  </h2>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Where does a household like this one sit among surveyed households?
+                  </p>
+                </div>
+                <FinancialContext />
+              </section>
+            ),
+          },
+        ]}
+      />
 
       <footer className="mt-auto border-t border-gray-200 pt-6 text-xs leading-relaxed text-gray-500">
         <p>

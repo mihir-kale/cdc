@@ -1,4 +1,5 @@
 import type { DimensionScore, SafetyLabel as SafetyLabelData } from "@/lib/api";
+import { gradeFor } from "@/lib/grades";
 
 /**
  * FinePrint — Payday Loan Safety Label.
@@ -7,12 +8,19 @@ import type { DimensionScore, SafetyLabel as SafetyLabelData } from "@/lib/api";
  *
  *  - No overall score, grade or rank. The five dimensions overlap, so any
  *    single number would hide that. The dependence analysis in
- *    `notebooks/cfpb_dimension_dependence.ipynb` is why.
+ *    `notebooks/cfpb_dimension_dependence.ipynb` is why. The per-dimension A-F
+ *    band in `@/lib/grades` is a reading aid for one dimension at a time and
+ *    must not be collapsed into a single letter for the lender.
  *  - No red/green. The CFPB has not classified any lender as safe or unsafe,
  *    so a traffic-light palette would assert something we cannot support. The
- *    scale is a single hue; the words carry the meaning.
- *  - Credible intervals stay secondary to the score, but are always present,
+ *    scale is a single hue; the words carry the meaning. This is why every grade
+ *    renders in the same indigo rather than a per-letter colour.
+ *  - Credible intervals stay secondary to the grade, but are always present,
  *    because most dimensions are genuinely inconclusive.
+ *  - The numeric score is not shown. The letter replaces it, per product
+ *    decision, so the meter below is the only place the underlying position is
+ *    visible. It carries the peer reference tick at 50; keep that tick, because
+ *    the grade bands are anchored on it.
  */
 
 const COMPARISON_TEXT: Record<DimensionScore["comparison"], string> = {
@@ -42,6 +50,8 @@ function DimensionRow({ dimension }: { dimension: DimensionScore }) {
   const { label, summary, score, comparison, complaints, prevalence, prevalence_lo90, prevalence_hi90 } =
     dimension;
 
+  const { grade, descriptor } = gradeFor(score);
+
   // Clamp so the meter can never render outside its track.
   const pct = Math.max(0, Math.min(100, score));
 
@@ -53,9 +63,9 @@ function DimensionRow({ dimension }: { dimension: DimensionScore }) {
             {label}
           </span>
         </h3>
-        <p className="text-sm tabular-nums text-gray-500">
-          <span className="text-2xl font-semibold text-gray-900">{score.toFixed(0)}</span>
-          <span className="text-gray-400">/100</span>
+        <p className="flex items-baseline gap-2">
+          <span className="text-2xl font-semibold text-indigo-700">{grade}</span>
+          <span className="text-xs text-gray-500">{descriptor}</span>
         </p>
       </div>
 
@@ -147,9 +157,10 @@ export default function SafetyLabel({ label }: { label: SafetyLabelData }) {
       </ul>
 
       <p className="mt-4 text-xs text-gray-500">
-        Scores are shown per dimension on purpose. FinePrint does not publish a single
-        overall score, because the five dimensions overlap and combining them would
-        hide that.
+        Grades are shown per dimension on purpose. FinePrint does not publish a single
+        overall grade or score, because the five dimensions overlap and combining them
+        would hide that. Each letter is a band on a continuous, peer-relative estimate
+        narrowed by statistical shrinkage, not a verdict about the lender.
       </p>
 
       <section className="mt-6 border-t border-gray-200 pt-5">
