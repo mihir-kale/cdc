@@ -52,16 +52,18 @@ TOKENS = {
     ),
 }
 
-# Grade bands. Colour is never the only signal: every card also carries the
-# letter and the plain-English comparison, and the mapping is monotonic in
-# severity. Foreground/background pairs are all >= 4.5:1.
+# Grade bands. Colour is never the only signal: every row also carries the letter
+# and the plain-English peer comparison, and the mapping is monotonic in severity.
+# Foreground/background pairs are all >= 4.5:1. There is deliberately no band
+# word ("Strong", "Weakest", ...): the letter plus the comparison sentence already
+# say it, and a third label was one more thing to read.
 GRADE_STYLE = {
-    "A": {"bg": "#ECFDF3", "fg": "#05603A", "edge": "#A9E5C3", "word": "Strong"},
-    "B": {"bg": "#ECFDF3", "fg": "#067647", "edge": "#A9E5C3", "word": "Favorable"},
-    "C": {"bg": "#F2F4F7", "fg": "#344054", "edge": "#E4E7EC", "word": "Typical"},
-    "D": {"bg": "#FFFAEB", "fg": "#B54708", "edge": "#FEDF89", "word": "Below typical"},
-    "E": {"bg": "#FEF0C7", "fg": "#93370D", "edge": "#FDB022", "word": "Weak"},
-    "F": {"bg": "#FEF3F2", "fg": "#B42318", "edge": "#FECDCA", "word": "Weakest"},
+    "A": {"bg": "#ECFDF3", "fg": "#05603A", "edge": "#A9E5C3"},
+    "B": {"bg": "#ECFDF3", "fg": "#067647", "edge": "#A9E5C3"},
+    "C": {"bg": "#F2F4F7", "fg": "#344054", "edge": "#E4E7EC"},
+    "D": {"bg": "#FFFAEB", "fg": "#B54708", "edge": "#FEDF89"},
+    "E": {"bg": "#FEF0C7", "fg": "#93370D", "edge": "#FDB022"},
+    "F": {"bg": "#FEF3F2", "fg": "#B42318", "edge": "#FECDCA"},
 }
 
 
@@ -365,10 +367,6 @@ a {{ color: {t['primary']}; }}
   margin-top: .1rem;
 }}
 .kyl-rowcard-grade {{ display: flex; align-items: center; gap: .5rem; }}
-.kyl-rowcard-word {{
-  font-size: .68rem; font-weight: 700; letter-spacing: .05em;
-  text-transform: uppercase; line-height: 1.2; max-width: 5.5rem;
-}}
 .kyl-letter {{ font-size: 2.1rem; line-height: 1; font-weight: 700; }}
 /* The hover overlay. */
 .kyl-rowcard-detail {{

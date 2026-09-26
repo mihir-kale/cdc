@@ -204,7 +204,7 @@ def section_card(inner_html: str) -> None:
 def _render_lender_report(label: dict) -> None:
     """One report card: five rows, subject left and grade right.
 
-    Each row shows only what is needed to read the grade at a glance. The numbers
+    Each row carries only the letter and the comparison sentence. The numbers
     behind it live in an absolutely positioned overlay on hover or keyboard focus.
     The overlay is absolutely positioned, which is the point: it takes no part in
     layout, so revealing it cannot move the rows, the card, or anything below it.
@@ -255,8 +255,6 @@ def _render_lender_report(label: dict) -> None:
             "</div>"
             '<div class="kyl-rowcard-grade">'
             f'<span class="kyl-letter" style="color:{style["fg"]}">{letter}</span>'
-            f'<span class="kyl-rowcard-word" style="color:{style["fg"]}">'
-            f'{style["word"]}</span>'
             "</div>"
             f'<div class="kyl-rowcard-detail"><dl>{dl}</dl>{scale}'
             "<p>Shrinkage pulls small samples toward the middle, so an extreme"
