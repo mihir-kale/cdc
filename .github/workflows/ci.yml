@@ -77,6 +77,12 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # layout.tsx uses LayoutProps<"/">, which Next generates into
+      # .next/types/. Without this step a fresh checkout has no such directory
+      # and `tsc` fails on a type that a developer's stale .next/ was hiding.
+      - name: Generate route types
+        run: npx next typegen
+
       - name: Type check
         run: npx tsc --noEmit
 

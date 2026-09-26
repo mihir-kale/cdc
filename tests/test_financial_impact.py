@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -360,22 +362,94 @@ class TestBatchParity(unittest.TestCase):
 
 
 class TestTrainingReproducibility(unittest.TestCase):
-    def test_retraining_reproduces_the_committed_model(self) -> None:
+    """Retraining must reproduce the committed artifact.
+
+    A byte-identical retrain is only a meaningful invariant *within one CPU
+    architecture*. XGBoost's histogram builder accumulates gradients in
+    parallel, and floating-point addition is not associative, so ARM and x86-64
+    round differently. With byte-identical package versions, macOS/arm64 and
+    Linux/x86-64 produce two artifacts that differ in their serialized bytes but
+    agree to ~1e-7 in predicted probability and exactly in weighted ROC-AUC.
+
+    So this asserts both halves of the real invariant:
+
+    * same architecture -> byte-identical (catches any accidental change to the
+      model, features, or hyperparameters);
+    * any architecture -> behaviorally identical (catches the same changes, and
+      holds everywhere).
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
         if not SURVEY_CSV.exists():
-            self.skipTest("wellbeing.csv not present")
+            raise unittest.SkipTest("wellbeing.csv not present")
         try:
             from app import train_financial_impact as trainer
         except ImportError as exc:  # pragma: no cover
-            self.skipTest(f"training dependencies unavailable: {exc}")
+            raise unittest.SkipTest(f"training dependencies unavailable: {exc}") from exc
+        try:
+            import numpy as np
+            import xgboost as xgb
+        except ImportError as exc:  # pragma: no cover
+            raise unittest.SkipTest(f"inference dependencies unavailable: {exc}") from exc
+        cls.np = np
+        cls.xgb = xgb
+        cls.trainer = trainer
+        cls.model, cls.holdout = trainer.train(trainer.load_survey())
 
-        before = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
-        model, _ = trainer.train(trainer.load_survey())
-        trainer.write_model(model, MODEL_PATH)
-        after = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
-        self.assertEqual(
-            before,
-            after,
-            "retraining changed the model bytes; the artifact is not reproducible",
+    def test_retrained_bytes_match_on_the_producing_platform(self) -> None:
+        reference = json.loads(CONTEXT_PATH.read_text())
+        producer = reference.get("produced_on_platform", {})
+        this = {"system": platform.system(), "machine": platform.machine()}
+        if not producer:
+            self.skipTest("no producing platform recorded; cannot scope byte check")
+        if (producer.get("system"), producer.get("machine")) != (
+            this["system"],
+            this["machine"],
+        ):
+            self.skipTest(
+                f"artifact was produced on {producer.get('system')}/"
+                f"{producer.get('machine')}, running on {this['system']}/{this['machine']}; "
+                "byte equality is not expected across architectures"
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.trainer.write_model(
+                self.model, Path(tmp) / "model.json"
+            )
+            self.assertEqual(
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest(),
+                "retraining changed the model bytes on the producing platform; "
+                "something in the model, features, or training changed",
+            )
+
+    def test_retrained_model_behaves_identically_everywhere(self) -> None:
+        """Architecture-independent: the same model, to float32 precision."""
+        reference = json.loads(CONTEXT_PATH.read_text())
+        expected_auc = reference["metrics"]["weighted_roc_auc"]
+
+        holdout_x = self.holdout["X_val"]
+        retrained = self.model.predict_proba(holdout_x)[:, 1]
+        self.assertAlmostEqual(
+            float(
+                self.trainer.evaluate(self.model, self.holdout)["weighted_roc_auc"]
+            ),
+            expected_auc,
+            places=9,
+            msg="retrained ROC-AUC moved; the model or the split changed",
+        )
+
+        committed = self.xgb.Booster()
+        committed.load_model(str(MODEL_PATH))
+        served = committed.predict(
+            self.xgb.DMatrix(holdout_x, enable_categorical=True)
+        )
+        worst = float(self.np.abs(retrained - served).max())
+        self.assertLess(
+            worst,
+            1e-6,
+            f"retrained and committed models disagree by {worst:.3e} on the "
+            "holdout set; expected float32 rounding noise only",
         )
 
 

@@ -40,6 +40,7 @@ Output: app/generated/financial_impact_model.json   (the booster)
 from __future__ import annotations
 
 import json
+import platform
 from pathlib import Path
 
 import numpy as np
@@ -190,6 +191,19 @@ def build_reference(metrics: dict, quantiles: list[float], n_survey: int) -> dic
         "seed": SEED,
         "test_size": TEST_SIZE,
         "source_script": SOURCE_SCRIPT,
+        "produced_on_platform": {
+            "system": platform.system(),
+            "machine": platform.machine(),
+            "note": (
+                "XGBoost histogram training accumulates gradients in parallel, "
+                "and float addition is not associative, so retraining on a "
+                "different CPU architecture yields different serialized bytes "
+                "while agreeing to ~1e-7 in predicted probability and exactly in "
+                "weighted ROC-AUC. Byte-identical retraining is therefore only "
+                "expected on this platform; elsewhere the test asserts "
+                "behavioural equivalence instead."
+            ),
+        },
         "caveats": CAVEATS,
     }
 

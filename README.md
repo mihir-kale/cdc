@@ -300,9 +300,25 @@ cd backend
 python -m app.train_financial_impact   # needs wellbeing.csv, ~5s
 ```
 
-Retraining reproduces the committed model byte for byte — there is a test that
-asserts it. The original script retrained on every run and then discarded the
-model, since its `save_model` call was commented out.
+Retraining reproduces the committed model, and a test asserts it. The original
+script retrained on every run and then discarded the model, since its
+`save_model` call was commented out.
+
+The interesting part is *how* it asserts that. A byte-identical retrain is only
+meaningful within one CPU architecture. XGBoost's histogram builder accumulates
+gradients in parallel, and floating-point addition is not associative, so ARM and
+x86-64 round differently. With byte-identical package versions, training on
+macOS/arm64 and Linux/x86-64 produces two artifacts that differ in their
+serialized bytes but agree to **8.9e-08** in predicted probability and produce
+an **identical** weighted ROC-AUC (0.8804976376). Thread count makes no
+difference on either platform, so this is architectural, not a race.
+
+So the test asserts both halves of the invariant: byte-identical on the platform
+that produced the artifact, and behaviourally identical everywhere (ROC-AUC
+within 1e-9, every holdout prediction within 1e-6). Dropping a single tree from
+300 to 299 moves AUC by 2.7e-05 and predictions by 5.9e-03, so the thresholds
+sit with roughly four orders of magnitude of margin on both sides. The producing
+platform is recorded in `financial_impact_context.json`.
 
 ### Why inference does not use scikit-learn
 
@@ -331,15 +347,23 @@ full codebook category set, and locked by a batch-parity test over the survey.
 
 ## Streamlit: status
 
-`app.py` is a **prototype stub, not the product.** It is 11 lines that set a page
-title and render a heading; it never imports the model or displays a result.
-`SNAPModeltrain.py` is the substantive work, and it is now integrated behind
-FastAPI as described above.
+`app.py` is a **Streamlit prototype, not the product.** As of `f4c7ca5` it holds
+a loan payoff timeline calculator (amortisation schedule and payoff date) under
+the "PayWatch" title. It is useful for exploring that calculation interactively,
+but it is not deployed, not wired into the FastAPI service, and the Next.js app
+does not use it. The survey model itself is not in `app.py` at all:
+`SNAPModeltrain.py` is the substantive work there, and it is now integrated
+behind FastAPI as described above.
+
+Note the deliberate asymmetry: the payoff calculator in `app.py` is a real
+arithmetic tool, whereas the Household Financial Context model is a *survey
+association* and deliberately carries no loan terms. Do not read the existence
+of one as implying the other.
 
 **Nothing about the Streamlit code dictates the production architecture.**
 `app.py` and `.streamlit/config.toml` are retained as a development and modelling
-convenience for whoever works on the survey model next. They are not deployed,
-not part of the product, and not required to run or serve FinePrint.
+convenience for whoever works on these models next. They are not deployed, not
+part of the product, and not required to run or serve FinePrint.
 
 If you want to iterate on the model in Streamlit, install it separately — it is
 deliberately absent from `requirements.txt`:

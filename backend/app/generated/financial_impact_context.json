@@ -141,6 +141,11 @@
   "seed": 42,
   "test_size": 0.2,
   "source_script": "SNAPModeltrain.py",
+  "produced_on_platform": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "note": "XGBoost histogram training accumulates gradients in parallel, and float addition is not associative, so retraining on a different CPU architecture yields different serialized bytes while agreeing to ~1e-7 in predicted probability and exactly in weighted ROC-AUC. Byte-identical retraining is therefore only expected on this platform; elsewhere the test asserts behavioural equivalence instead."
+  },
   "caveats": [
     "Based on a 2016 survey of 6,394 US households. It does not describe 2026 finances, and benefit rules and costs have changed since.",
     "This is a statistical association, not a cause and not a personal forecast. Two households with identical answers can sit in very different circumstances.",
