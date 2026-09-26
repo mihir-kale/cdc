@@ -1,37 +1,44 @@
 # FinePrint
 
-FinePrint is a consumer-facing tool that helps people understand and compare
-payday lenders. It draws on CFPB complaint data, lender information,
-Reddit/consumer discussions, and quantitative analysis to produce a plain-language
-summary of what a loan really costs.
+FinePrint is a consumer-facing tool that helps people understand payday loans. It
+answers two separate questions:
 
-This repository is the shared starting point for the team. The models, scoring
-methodology, data pipelines, and UI are all still to come — right now it is just
-enough to run both halves of the stack and confirm they talk to each other.
+1. **Is this lender risky?** — a five-dimension safety label built from CFPB
+   consumer complaints, for all 482 canonical payday lenders.
+2. **What does a household like mine look like?** — a household financial
+   context assessment, derived from the CFPB National Financial Well-Being
+   Survey.
 
-## Tech stack
+These are deliberately kept apart. The first is about a lender, the second is
+about a household. They are never combined, there is no overall FinePrint score,
+and neither one is presented as predicting the other.
 
-| Layer     | Tools                                            |
-| --------- | ------------------------------------------------ |
-| Frontend  | Next.js, TypeScript, Tailwind CSS                |
-| Backend   | Python, FastAPI                                   |
-| Data / ML | pandas, NumPy, scikit-learn                      |
-| Notebooks | Jupyter                                          |
-| VCS       | Git                                              |
-
-## Project direction
+## Architecture
 
 ```text
-Data Sources
-    ↓
-Data Cleaning / Feature Engineering
-    ↓
-Statistical + ML Analysis
-    ↓
-Lender Nutrition Label
-    ↓
-Consumer-Facing UX
+                    FinePrint
+                       │
+                 Next.js frontend  (Vercel)
+                       │
+                     FastAPI  (Render)
+                    ╱         ╲
+        CFPB Safety Label    Household Financial
+              482 lenders       Context
 ```
+
+| Layer     | Tools                                                        |
+| --------- | ------------------------------------------------------------ |
+| Frontend  | Next.js 16, TypeScript, Tailwind CSS 4                       |
+| Backend   | Python 3.12, FastAPI, Uvicorn                                |
+| Models    | XGBoost (household context), pandas/NumPy                     |
+| Analysis  | pandas, NumPy, SciPy, scikit-learn, Jupyter                   |
+| VCS / CI  | Git, GitHub Actions                                          |
+
+Both model artifacts are **pre-built and committed**, so the service starts
+without running any data pipeline or training:
+
+- `backend/app/generated/lender_safety_labels.json` — 482 lender labels (~380 KB)
+- `backend/app/generated/financial_impact_model.json` — the household model (~610 KB)
 
 ## Folder structure
 
@@ -40,24 +47,29 @@ Consumer-Facing UX
 ├── frontend/            Next.js + TypeScript + Tailwind app
 │   └── src/
 │       ├── app/         App Router pages and layout
-│       ├── components/  React components (LenderSearch, SafetyLabel)
+│       ├── components/  LenderSearch, SafetyLabel, FinancialContext
 │       └── lib/         API client and shared types
 ├── backend/             FastAPI service
 │   ├── app/
-│   │   ├── main.py           App definition and routes
-│   │   ├── models.py         Pydantic schemas
-│   │   ├── label_store.py    Loads the generated artifact (stdlib only)
-│   │   ├── safety_labels.py  Builds the artifact from the processed features
-│   │   └── generated/
-│   │       └── lender_safety_labels.json   Committed, ~380 KB
-│   ├── requirements.txt
-│   └── requirements-dev.txt
+│   │   ├── main.py                    App definition and routes
+│   │   ├── models.py                  Pydantic schemas
+│   │   ├── label_store.py             Loads the lender artifact (stdlib only)
+│   │   ├── safety_labels.py           Builds the lender artifact offline
+│   │   ├── financial_impact.py        Household context: codebook + inference
+│   │   ├── train_financial_impact.py  Offline training and export
+│   │   └── generated/                 Committed artifacts
+│   ├── requirements.txt           Runtime dependencies
+│   ├── requirements-test.txt      What CI installs
+│   └── requirements-dev.txt       Adds notebooks and plotting
 ├── data/
 │   ├── raw/             Downloaded source datasets (git-ignored)
 │   └── processed/       Cleaned and derived datasets (git-ignored)
 ├── notebooks/           Jupyter notebooks for exploration
 ├── tests/               unittest suite
-├── .env.example
+├── wellbeing.csv        CFPB NFWBS public-use file (training input)
+├── render.yaml          Render blueprint for the backend
+├── SNAPModeltrain.py    Teammate's original model script (training only)
+├── app.py               Streamlit prototype stub (not the product)
 └── README.md
 ```
 
@@ -113,37 +125,44 @@ python -m unittest discover -s tests -v
 
 ## Running the backend
 
-Requires Python 3.11 or 3.12 (developed against 3.12). Do **not** use Python 3.14 —
-`ensurepip` is broken there, so `python3 -m venv` cannot create an environment.
+Requires **Python 3.12**. Do **not** use Python 3.14 — `ensurepip` is broken
+there, so `python3 -m venv` cannot create an environment.
 
 ```bash
 cd backend
-/usr/local/bin/python3.12 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt   # or requirements.txt for runtime only
 uvicorn app.main:app --reload
 ```
 
-The API is then on <http://localhost:8000>. Useful URLs:
+The API is then on <http://localhost:8000>. Endpoints:
 
-| Endpoint           | Purpose                            |
-| ------------------ | ---------------------------------- |
-| `/`                | Service name and version           |
-| `/health`          | Liveness check, returns `{"status": "ok"}` |
-| `/dataset`         | Lender count, complaint total, and the methodology text the UI discloses |
-| `/lenders`         | All 482 lenders, for search (id, name, complaint count, evidence band) |
-| `/lenders/{id}`    | One lender's full safety label, `404` if unknown |
-| `/docs`            | Interactive OpenAPI docs           |
+| Endpoint                        | Purpose                                                       |
+| ------------------------------- | ------------------------------------------------------------- |
+| `/`                             | Service name and version                                      |
+| `/health`                       | Liveness, plus whether both committed artifacts loaded        |
+| `/dataset`                      | Lender count, complaint total, methodology text the UI shows  |
+| `/lenders`                      | All 482 lenders, for search                                   |
+| `/lenders/{id}`                 | One lender's full safety label, `404` if unknown              |
+| `/financial-impact/inputs`      | Survey codebook for the household inputs                      |
+| `/financial-impact/context`     | `POST` a household profile, get its context                   |
+| `/docs`                         | Interactive OpenAPI docs                                      |
 
 Verify it works:
 
 ```bash
 curl http://localhost:8000/health
+# {"status":"ok","artifacts":{"lender_safety_labels":true,"financial_impact_model":true}}
 ```
+
+`/health` returns `503` if either artifact is missing, so a half-working deploy
+fails visibly instead of serving partial results. It loads the artifacts but
+never runs inference or retrains anything.
 
 ## Running the frontend
 
-Requires Node.js 20+.
+Requires Node.js 20+ (developed against 22).
 
 ```bash
 cd frontend
@@ -151,22 +170,17 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. The homepage searches the lenders returned by
-`GET /lenders` and shows the safety label for the one you select, so run the
-backend first or the list will show a connection error.
+Open <http://localhost:3000>. The homepage has two sections: **About the
+lender** (search and safety label) and **Household Financial Context**. Start the
+backend first or the search list will show a connection error.
 
-To point the frontend at a different backend, copy the example env file and edit
-it:
+| Variable              | Default                 | Purpose          |
+| --------------------- | ----------------------- | ---------------- |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend base URL |
 
-```bash
-cp .env.example .env.local
-```
-
-Run that from inside `frontend/`.
-
-| Variable              | Default                 | Purpose             |
-| --------------------- | ----------------------- | ------------------- |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend base URL    |
+Copy `.env.example` to `.env.local` to change it. The variable is inlined into
+the client bundle at build time, so it is public by design — never put a secret
+in it. The backend needs no secret or API key at all.
 
 ## Data science workspace
 
@@ -237,20 +251,180 @@ It is present in commit `bc64848`; retrieve it with:
 git show bc64848:paydayComplaints.csv > data/raw/paydayComplaints.csv
 ```
 
-## Environment variables
+## Household Financial Context
 
-Copy the example file to `.env` and fill in values as they are needed. Never
-commit real credentials — `.env` is git-ignored.
+The second half of FinePrint. It answers a different question from the safety
+label — not "is this lender risky" but "where does a household like mine sit in
+survey terms".
+
+### What the model is
+
+Amishi's `SNAPModeltrain.py`, integrated **unchanged**. It is a gradient-boosted
+classifier over nine household variables from the CFPB National Financial
+Well-Being Survey (`wellbeing.csv`, 6,394 households) that estimates the survey
+item *"Any household member received SNAP benefits."* Weighted holdout ROC-AUC
+**0.8805**.
+
+Features: age band, education, household income, marital status, household size,
+metro/non-metro, county poverty share, and presence of children in four age
+bands. Input labels are transcribed from the official NFWBS public-use file
+codebook and live in `backend/app/financial_impact.py`, which is the single
+source of truth for both the API and the UI.
+
+### What it is not
+
+SNAP receipt is used as a **proxy for household financial strain**. The model is
+not a loan simulator, and the UI never claims it is:
+
+- it does **not** predict what taking out a loan would do to your finances
+- it does **not** estimate whether you would qualify for SNAP
+- it does **not** predict that you personally would receive SNAP
+- it says **nothing** about any lender, and changes **no** safety label score
+
+There are deliberately no loan amount, APR, term or payment inputs, because no
+model here can support them. A genuine "what would this loan do to my budget"
+tool needs a different model; see Planned work.
+
+Because a 2016 survey association is easy to over-read as a personal forecast,
+the headline result is a **percentile within the survey population**, not a
+probability. The raw model output is preserved in the API as
+`model_association_rate` and shown in the UI only as a clearly-labelled
+technical detail.
+
+### Training and inference
+
+Training is offline and reproducible; serving only infers.
 
 ```bash
-cp .env.example .env
+cd backend
+python -m app.train_financial_impact   # needs wellbeing.csv, ~5s
 ```
 
-| Variable              | Purpose                          |
-| --------------------- | -------------------------------- |
-| `REDDIT_CLIENT_ID`    | Reddit API app credentials       |
-| `REDDIT_CLIENT_SECRET`| Reddit API app secret             |
-| `OPENAI_API_KEY`      | OpenAI API access                |
+Retraining reproduces the committed model byte for byte — there is a test that
+asserts it. The original script retrained on every run and then discarded the
+model, since its `save_model` call was commented out.
+
+### Why inference does not use scikit-learn
+
+Two environment bugs shaped this, both documented in
+`backend/app/financial_impact.py`:
+
+1. **NumPy 2 removed `np.NaN`.** xgboost 2.0.3's categorical encoder still calls
+   it, so the original script dies on any modern NumPy. Fixed by pinning
+   `numpy<2`.
+2. **scikit-learn 1.6's tag-system change broke XGBoost serialization in both
+   directions.** On 1.6.x `save_model` works but `load_model` raises
+   `'super' object has no attribute '__sklearn_tags__'`; on 1.9.x `save_model`
+   itself raises `_estimator_type undefined`.
+
+The fix is to bypass the sklearn wrapper: training exports via
+`model.get_booster().save_model()`, and inference uses `xgboost.Booster` with
+`DMatrix`. That path is bit-identical to `predict_proba` (max difference `0.0`,
+verified across two different environment stacks) and means **the deployed
+service does not need scikit-learn installed**.
+
+A third bug surfaced while wiring this up and is worth knowing about: casting a
+one-row inference frame with a bare `astype("category")` renumbers categories
+from zero, so xgboost evaluates the wrong branch of every categorical split. A
+real survey household scored `0.260` instead of `0.0060`. Fixed by declaring the
+full codebook category set, and locked by a batch-parity test over the survey.
+
+## Streamlit: status
+
+`app.py` is a **prototype stub, not the product.** It is 11 lines that set a page
+title and render a heading; it never imports the model or displays a result.
+`SNAPModeltrain.py` is the substantive work, and it is now integrated behind
+FastAPI as described above.
+
+**Nothing about the Streamlit code dictates the production architecture.**
+`app.py` and `.streamlit/config.toml` are retained as a development and modelling
+convenience for whoever works on the survey model next. They are not deployed,
+not part of the product, and not required to run or serve FinePrint.
+
+If you want to iterate on the model in Streamlit, install it separately — it is
+deliberately absent from `requirements.txt`:
+
+```bash
+pip install streamlit
+streamlit run app.py
+```
+
+Cleaning this up is left to a separate, deliberate change. Nothing in the repo
+depends on these files.
+
+## Environment variables
+
+The backend needs **no secrets and no API keys**. The only setting is CORS.
+
+| Variable                    | Where            | Purpose                                                       |
+| --------------------------- | ---------------- | ------------------------------------------------------------- |
+| `FINEPRINT_ALLOWED_ORIGINS` | backend          | Comma-separated browser origins. Defaults to `localhost:3000` |
+| `NEXT_PUBLIC_API_URL`       | frontend         | Backend base URL. Defaults to `http://localhost:8000`         |
+
+Never commit real credentials. `NEXT_PUBLIC_*` values are inlined into the client
+bundle at build time and are public by design.
+
+## Deployment
+
+Intended target: **Vercel** for the frontend, **Render** for the backend, over
+HTTPS. Both are prepared but **not yet deployed** — see below.
+
+```
+Browser ──HTTPS──> Vercel (Next.js) ──HTTPS──> Render (FastAPI)
+                                                  ├── CFPB Safety Labels
+                                                  └── Household Financial Context
+```
+
+### Backend on Render
+
+`render.yaml` is a Render blueprint at the repo root.
+
+1. In Render: **New → Blueprint**, point at this repository.
+2. Render will prompt for `FINEPRINT_ALLOWED_ORIGINS`. Set it to the deployed
+   frontend origin once you have one, e.g. `https://your-app.vercel.app`. It is
+   left unset in the repo rather than guessed.
+3. Deploy. Render reads `PYTHON_VERSION` (3.12.4), installs
+   `backend/requirements.txt`, and starts
+   `uvicorn app.main:app --host 0.0.0.0 --port $PORT` with `backend/` as the
+   working directory.
+
+Nothing in the service depends on a developer's machine: both artifacts are
+resolved relative to `app/generated/` via `__file__`, and `wellbeing.csv` is
+needed only for training.
+
+**First deploy to watch:** xgboost's Linux wheel links against the system
+OpenMP runtime (`libgomp.so.1`). Most Render images have it; if the service
+fails to import xgboost, add this to `buildCommand` in `render.yaml`:
+
+```
+apt-get update && apt-get install -y libgomp1 && pip install --no-cache-dir -r requirements.txt
+```
+
+Also note the free plan sleeps after inactivity, so the first request after a
+quiet period can take ~30s.
+
+### Frontend on Vercel
+
+1. In Vercel: **Add New → Project**, import this repository.
+2. Set **Root Directory** to `frontend`. Vercel detects Next.js; no
+   `vercel.json` is needed.
+3. Add one environment variable: `NEXT_PUBLIC_API_URL`, set to the Render
+   service URL. No secrets.
+4. Deploy.
+
+Because `NEXT_PUBLIC_*` is inlined at build time, redeploy after changing it.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- **Backend** — Python 3.12, installs `requirements-test.txt`, runs the full
+  unittest suite, then asserts both artifacts load.
+- **Frontend** — Node 22, `npm ci`, lint, `tsc --noEmit`, production build.
+
+It deliberately does **not** run the CFPB narrative pipeline or retrain models;
+the committed artifacts are what production serves, and the suite verifies them
+directly. Runs in about a minute.
 
 ## Planned work
 
@@ -259,15 +433,18 @@ Done:
 - CFPB complaint analysis — `notebooks/cfpb_*.ipynb`
 - Bayesian complaint modeling — empirical-Bayes posteriors in
   `notebooks/cfpb_shrinkage.ipynb`
-- Financial Nutrition Label UI — the five-dimension Payday Loan Safety Label
-  described above
+- Payday Loan Safety Label UI — the five-dimension label described above
+- Household Financial Context — the survey-based model described above, served
+  behind FastAPI and surfaced in the Next.js app
+- Vercel/Render deployment config and CI
 
 Not started:
 
+- **A real loan-impact simulation.** The current household model cannot answer
+  "what would this loan do to my finances", and no amount, rate or term inputs
+  were invented to pretend otherwise. This needs its own model.
 - Reddit and consumer sentiment analysis
 - Lender and product reference data (APR, state licensing)
-- K-means lender clustering
-- PCA visualization
-- Anomaly detection
-- Monte Carlo financial simulation
-- Combining the safety label with a personal financial impact estimate
+- Combining the safety label with a personal impact estimate — deliberately not
+  done, see above
+- K-means lender clustering, PCA visualization, anomaly detection, Monte Carlo

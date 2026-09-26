@@ -1,0 +1,16 @@
+# Minimum set needed to run the full test suite. Installed by CI.
+#
+# Split from requirements-dev.txt so CI does not have to install Jupyter and
+# matplotlib just to exercise a few unit tests. httpx is listed explicitly
+# because FastAPI's TestClient needs it; previously it only arrived by accident
+# as a transitive dependency of jupyterlab, which would have broken CI.
+-r requirements.txt
+
+httpx>=0.27
+
+# app/safety_labels.py imports scipy.stats, and the suite imports it directly.
+scipy>=1.11
+
+# Only tests/test_financial_impact.py needs this, to confirm that retraining
+# reproduces the committed model artifact byte for byte.
+scikit-learn>=1.5
