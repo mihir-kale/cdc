@@ -1,8 +1,9 @@
  [theme]
-baseFontSize = 14
+baseFontSize = 17
 
-primaryColor = "#111b33"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F8FAFC"
-textColor = "#0F172A"
-font = "sans serif"
+primaryColor = "#FFFFFF"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#c1d2ff"
+textColor = "#0a0a0a"
+font = "Spectral:https://fonts.googleapis.com/css2?family=Spectral:wght@400;600;700&display=swap"
+
