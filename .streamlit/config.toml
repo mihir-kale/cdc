@@ -1,0 +1,8 @@
+ [theme]
+baseFontSize = 14
+
+primaryColor = "#111b33"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+textColor = "#0F172A"
+font = "sans serif"
