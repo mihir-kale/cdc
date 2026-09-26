@@ -1,0 +1,19 @@
+# Dependencies for app.py, the Streamlit prototype.
+#
+# Deliberately separate from backend/requirements.txt. This app only ever runs
+# inference -- it loads the committed artifact through xgb.Booster and never
+# fits -- so it needs neither scikit-learn nor scipy, which together are ~145 MB
+# of the backend's dependency tree.
+#
+# Used by Streamlit Community Cloud, which installs this file at deploy time.
+# Locally, `pip install -r requirements.txt` then `streamlit run app.py`.
+#
+# Versions match backend/requirements.txt where they overlap. numpy<2 is not a
+# preference: xgboost 2.0.3's categorical encoder still calls np.NaN, which
+# NumPy removed in 2.0. xgboost is pinned for the same reason as the backend --
+# it is the version the committed model artifact was built and verified against.
+
+streamlit>=1.40
+pandas>=2.2,<3
+numpy>=1.26,<2
+xgboost==2.0.3
