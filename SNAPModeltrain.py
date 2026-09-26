@@ -36,7 +36,6 @@ feature_cols = [
     "PPHHSIZE",
     "total_children",
     "child_ratio",
-    "PCTLT200FPL",
 ]
 
 cat_cols = ["agecat", "PPEDUC", "PPINCIMP", "PPMARIT", "PPMSACAT"]
@@ -88,7 +87,6 @@ print(
 val_preds = (val_probs >= 0.35).astype(int)
 print("\nClassification Report:\n", classification_report(y_val, val_preds))
 
-# 9. Export Trained Artifact
-# model.save_model("snap_xgboost.json")
-# print("\nModel saved successfully as snap_xgboost.json!")
+model.save_model("snap_xgboost.json")
+print("\nModel saved successfully as snap_xgboost.json!")
 
