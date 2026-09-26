@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import html
 import importlib.util
+import json
 import math
 import sys
 from pathlib import Path
@@ -66,6 +67,14 @@ get_lender = _label_store.get_lender
 lender_index = _label_store.lender_index
 
 from kyl_theme import GRADE_STYLE, TOKENS, stylesheet  # noqa: E402
+
+dataset_summary = _label_store.dataset_summary
+
+_HOUSEHOLD_CONTEXT_PATH = _BACKEND / "app" / "generated" / "financial_impact_context.json"
+try:
+    _HOUSEHOLD_CONTEXT = json.loads(_HOUSEHOLD_CONTEXT_PATH.read_text(encoding="utf-8"))
+except (OSError, ValueError):  # pragma: no cover
+    _HOUSEHOLD_CONTEXT = {}
 
 # --------------------------------------------------------------------------
 # Data and model constants. Unchanged from the previous version on purpose.
@@ -193,50 +202,37 @@ def section_card(inner_html: str) -> None:
 
 
 def _render_lender_report(label: dict) -> None:
-    """Name, counts, evidence badge, five grade cards, methodology accordion."""
-    # 1-3: identity, complaint count, evidence badge.
-    section_card(
-        '<div class="kyl-lender-head">'
-        f'<span class="kyl-lender-name">{esc(label["name"])}</span>'
-        f'<span class="kyl-badge">Evidence: {esc(label["evidence"])}</span></div>'
-        f'<p class="kyl-meta">'
-        f'<b>{esc(plural(label["n_complaints"], "complaint"))}</b> in this dataset'
-        f" &middot; {esc(label['methodology']['direction'])}</p>"
-    )
+    """One report card: five rows, subject left and grade right.
 
-    # 4: the five grade cards.
-    cards = []
-    for slug, dim in label["dimensions"].items():
-        letter, descriptor = grade_for(dim["score"])
+    Each row shows only what is needed to read the grade at a glance. The numbers
+    behind it live in an absolutely positioned overlay on hover or keyboard focus.
+    The overlay is absolutely positioned, which is the point: it takes no part in
+    layout, so revealing it cannot move the rows, the card, or anything below it.
+    """
+    rows = []
+    for dim in label["dimensions"].values():
+        letter, _descriptor = grade_for(dim["score"])
         style = GRADE_STYLE[letter]
         pct = min(100.0, max(0.0, dim["score"]))
+        verdict = COMPARISON_TEXT[dim["comparison"]]
 
-        facts = [("Complaints", f"{dim['complaints']:,}")]
-        if dim.get("prevalence") is not None:
-            facts.append(
-                (
-                    "Estimated rate",
-                    f"{dim['prevalence'] * 100:.1f}%",
-                )
-            )
-            facts.append(
-                (
-                    "90% interval",
-                    f"{dim['prevalence_lo90'] * 100:.1f}–"
-                    f"{dim['prevalence_hi90'] * 100:.1f}%",
-                )
-            )
-        facts.append(("Verdict", COMPARISON_TEXT[dim["comparison"]]))
+        facts = [
+            ("Raw score", f"{dim['score']:.1f} of 100"),
+            ("Complaints used", f"{dim['complaints']:,}"),
+            ("Estimated rate", f"{dim['prevalence'] * 100:.1f}%"),
+            (
+                "90% credible interval",
+                f"{dim['prevalence_lo90'] * 100:.1f}"
+                f"\u2013{dim['prevalence_hi90'] * 100:.1f}%",
+            ),
+            ("Modeled peer rate", f"{dim.get('peer_rate', 0.0) * 100:.2f}%"),
+            ("Verdict", verdict),
+        ]
+        dl = "".join(f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in facts)
 
-        fact_rows = "".join(
-            f"<div><span>{esc(k)}</span><span>{esc(v)}</span></div>" for k, v in facts
-        )
-
-        # The scale is explicitly labelled at both ends with the peer reference
-        # marked, because an unlabelled bar asserts nothing.
         scale = (
             '<div class="kyl-scale">'
-            f'<div class="kyl-scale-track">'
+            '<div class="kyl-scale-track">'
             f'<span class="kyl-scale-fill" style="width:{pct:.1f}%;'
             f'background:{style["fg"]}"></span>'
             '<span class="kyl-scale-peer" style="left:50%"></span>'
@@ -245,51 +241,42 @@ def _render_lender_report(label: dict) -> None:
             "<span>0 &middot; least favorable</span>"
             "<span>peers sit at 50</span>"
             "<span>100 &middot; most</span>"
-            "</div></div>"
+            "</div>"
+            "</div>"
         )
 
-        # Native <details> disclosure: keyboard operable, no JS, and it only
-        # expands when the reader asks, so nothing shifts on hover.
-        details = (
-            "<details><summary>View details</summary>"
-            f'<p class="kyl-fine">Raw score {dim["score"]:.1f} of 100.'
-            f' Modeled peer rate for this complaint type is'
-            f' {dim.get("peer_rate", float("nan")) * 100:.2f}% of complaints'
-            f" received by a modeled peer. Shrinkage pulls small samples toward"
-            f" the middle, so an extreme score on thin evidence is not an extreme"
-            f" lender.</p></details>"
-        )
-
-        cards.append(
-            f'<article class="kyl-grade" style="--kyl-card:{style["bg"]};'
-            f'--kyl-border:{style["edge"]};--kyl-edge:{style["fg"]}">'
-            f'<h4 class="kyl-grade-name">{esc(dim["label"])}</h4>'
-            '<div class="kyl-grade-row">'
+        rows.append(
+            '<li class="kyl-rowcard" tabindex="0" '
+            f'style="--kyl-edge:{style["fg"]}" '
+            f'aria-label="{esc(dim["label"])}: grade {letter}, {esc(verdict)}">'
+            "<div>"
+            f'<span class="kyl-rowcard-name">{esc(dim["label"])}</span>'
+            f'<span class="kyl-rowcard-cmp">{esc(verdict)}</span>'
+            "</div>"
+            '<div class="kyl-rowcard-grade">'
             f'<span class="kyl-letter" style="color:{style["fg"]}">{letter}</span>'
-            f'<span class="kyl-grade-word" style="color:{style["fg"]}">'
-            f'{style["word"]}</span></div>'
-            f'<p class="kyl-compare">{esc(descriptor)}</p>'
-            f'<div class="kyl-facts">{fact_rows}</div>'
-            f"{scale}{details}</article>"
+            f'<span class="kyl-rowcard-word" style="color:{style["fg"]}">'
+            f'{style["word"]}</span>'
+            "</div>"
+            f'<div class="kyl-rowcard-detail"><dl>{dl}</dl>{scale}'
+            "<p>Shrinkage pulls small samples toward the middle, so an extreme"
+            " score on thin evidence is not an extreme lender.</p>"
+            "</div>"
+            "</li>"
         )
 
-    st.html(f'<div class="kyl-grades">{"".join(cards)}</div>')
-
-    # 5: methodology / disclaimer accordion.
-    caveats = "".join(f"<li>{esc(c)}</li>" for c in label["methodology"]["caveats"])
-    with st.expander("Methodology and limitations"):
-        st.markdown(label["methodology"]["summary"])
-        st.markdown(f'<ul class="kyl-list">{caveats}</ul>', unsafe_allow_html=True)
-        st.markdown(
-            f'<p class="kyl-fine">Method: {esc(label["method"])}. Grades are relative'
-            " to modeled payday peers and are shown per dimension. There is no"
-            " overall grade, because the five dimensions overlap and one number"
-            " would hide that. The CFPB has not classified any lender as safe or"
-            " unsafe, and neither does this model.</p>",
-            unsafe_allow_html=True,
-        )
-
-
+    complaints = esc(plural(label["n_complaints"], "CFPB payday complaint"))
+    st.html(
+        '<article class="kyl-report">'
+        '<header class="kyl-report-head"><div>'
+        f'<h2 class="kyl-report-name">{esc(label["name"])}</h2>'
+        f'<p class="kyl-meta" style="margin:.25rem 0 0">{complaints}</p>'
+        "</div>"
+        f'<span class="kyl-badge">Evidence: {esc(label["evidence"])}</span>'
+        "</header>"
+        f'<ul style="list-style:none;margin:0;padding:0">{"".join(rows)}</ul>'
+        "</article>"
+    )
 
 
 def _render_household_result(age, education, income, marital, metro, size, children):
@@ -331,69 +318,149 @@ def _render_household_result(age, education, income, marital, metro, size, child
             " SNAP benefits in the survey than the modeled peer group."
         )
 
+    year = _HOUSEHOLD_CONTEXT.get("survey_year", "a national")
     section_card(
         '<p class="kyl-outcome-lab">Survey association</p>'
         f'<p class="kyl-outcome-val">{pct:.1f}%</p>'
         f'<p class="kyl-outcome-note"><b>{esc(band)}.</b> {esc(reading)}</p>'
+        '<p class="kyl-note" style="margin-top:.7rem">A survey association from'
+        f" {esc(year)}, not an eligibility determination and not a personal"
+        " forecast. What that means, and what it does not, is in the Methodology"
+        " tab.</p>"
     )
-
-    section_card(
-        "<h3>What this means</h3>"
-        '<ul class="kyl-list">'
-        "<li>It places a household like this one within a 2016 survey population"
-        " of 6,394 US households.</li>"
-        "<li>SNAP receipt is used as a proxy for financial strain, so a higher"
-        " figure points to more strain, not to a benefit being available.</li>"
-        "</ul>"
-        "<h3>What this does not mean</h3>"
-        '<ul class="kyl-list">'
-        "<li>It is not an eligibility determination, and it cannot tell you"
-        " whether you personally would qualify.</li>"
-        "<li>It is not a forecast. Two households with identical answers can sit"
-        " in very different circumstances.</li>"
-        "<li>It says nothing about any lender and changes no complaint grade.</li>"
-        "</ul>"
-    )
-
-    # Which factors carry the most weight, at the model level. This is a
-    # property of the fitted model, not an attribution for this household, and
-    # the copy says so.
-    try:
-        gains = booster.get_score(importance_type="gain")
-        order = sorted(gains.items(), key=lambda kv: -kv[1])[:3]
-        friendly = {
-            "child_ratio": "children relative to household size",
-            "total_children": "presence of children",
-            "PPHHSIZE": "household size",
-            "PPINCIMP": "household income band",
-            "agecat": "age group",
-            "PPEDUC": "education",
-            "PPMARIT": "marital status",
-            "PPMSACAT": "metro versus non-metro",
-        }
-        top = "".join(
-            f"<li>{esc(friendly.get(k, k))}</li>" for k, _ in order
-        )
-        factors = (
-            "<h3>Factors that matter most in this model</h3>"
-            f'<ul class="kyl-list">{top}</ul>'
-            '<p class="kyl-fine">These are the strongest splits across the whole'
-            " fitted model, not a breakdown of this particular household. A tree"
-            " model has no per-household attribution, so this should not be read"
-            " as a list of reasons for the number above.</p>"
-        )
-        section_card(factors)
-    except Exception:  # pragma: no cover - diagnostics only, never blocks output
-        pass
-
     st.html(
-        f'<p class="kyl-note">For an actual determination, eligibility is set by'
-        f" your state agency. Official program information: "
+        '<p class="kyl-note">For an actual determination, eligibility is set by'
+        " your state agency. Official program information: "
         f'<a href="{esc(SNAP_OFFICIAL)}" target="_blank" rel="noopener noreferrer">'
-        f"USDA Food and Nutrition Service — SNAP</a>.</p>"
+        "USDA Food and Nutrition Service &mdash; SNAP</a>.</p>"
     )
 
+def _render_methodology() -> None:
+    """Everything about how the numbers are produced and what they cannot mean.
 
+    Deliberately kept out of the three product tabs. Each of those answers one
+    question and should read as a clean answer to it; the qualifications belong
+    in one place a reader can choose to open.
+    """
+    st.html(
+        '<div style="margin:1.5rem 0 1rem">'
+        "<h2>Methodology</h2>"
+        '<p class="kyl-note">How each figure is produced, and what it does not'
+        " establish.</p></div>"
+    )
+
+    left, right = st.columns(2, gap="large")
+
+    with left:
+        summary = dataset_summary()
+        methodology = summary["methodology"]
+
+        st.markdown("#### Lender Complaint Profile")
+        st.markdown(methodology["summary"])
+        st.markdown(
+            '<p class="kyl-note">Each dimension is scored 0&ndash;100 by Method C:'
+            " a Beta-Binomial posterior for the lender's complaint rate, referenced"
+            " to the fitted peer population for that complaint type. A typical peer"
+            " sits at <b>50</b>, which is why the bands on the report card are"
+            " anchored there and why the scale is marked at 50. Statistical"
+            " shrinkage pulls thin samples toward the middle, so an extreme score"
+            " on little evidence is not an extreme lender.</p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="kyl-note"><b>There is no overall grade.</b> The five'
+            " dimensions overlap, so a single number would hide that. Colour is"
+            " always paired with the letter and the comparison text, and is"
+            " relative to modeled peers &mdash; it is not a safety verdict. The"
+            " CFPB has not classified any lender as safe or unsafe, and neither"
+            " does this model.</p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "**Evidence strength** describes how much complaint data supports the"
+            " grades, not how good or bad a lender is."
+        )
+        bands = "".join(
+            f"<li>{esc(b['label'])} &mdash; {b['min_complaints']}+ complaints</li>"
+            for b in sorted(methodology["evidence_bands"], key=lambda b: b["min_complaints"])
+        )
+        st.markdown(f"<ul>{bands}</ul>", unsafe_allow_html=True)
+        st.markdown("**Caveats**")
+        for caveat in methodology["caveats"]:
+            st.markdown(f"- {caveat}")
+        st.markdown(
+            f'<p class="kyl-fine">Method: {esc(summary["method"])}. Dataset:'
+            f' {esc(summary["lender_count"])} lenders,'
+            f' {esc(summary["total_complaints"])} complaints.</p>',
+            unsafe_allow_html=True,
+        )
+
+    with right:
+        ctx = _HOUSEHOLD_CONTEXT
+        st.markdown("#### Household Financial Context")
+        if ctx:
+            st.markdown(
+                f'<p class="kyl-note">A gradient-boosted classifier over the'
+                f' {esc(ctx["households_modelled"])} households in the'
+                f' {esc(ctx["survey"])} ({esc(ctx["survey_year"])}) that estimates'
+                f' the survey item &ldquo;{esc(ctx["target"])}&rdquo; as a proxy for'
+                f' financial strain. Weighted holdout ROC-AUC'
+                f' <b>{ctx["weighted_roc_auc"]:.4f}</b> on an 80/20 stratified'
+                f' split, seed {esc(ctx["seed"])}.</p>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<p class="kyl-note">SNAP receipt is a proxy for strain, not a'
+                f' benefit calculation. The figure is an association measured'
+                f' against a {esc(ctx["survey_year"])} survey and is easy to'
+                " over-read as a personal forecast. It is not an eligibility"
+                " determination.</p>",
+                unsafe_allow_html=True,
+            )
+            st.markdown("**Caveats**")
+            for caveat in ctx.get("caveats", []):
+                st.markdown(f"- {caveat}")
+
+        st.markdown("#### Loan Payoff Calculator")
+        st.markdown(
+            '<p class="kyl-note">Standard amortisation. Monthly interest is'
+            " principal &times; APR / 12; payoff time solves the standard annuity"
+            " equation and is rounded up to a whole month. It is arithmetic on the"
+            " numbers entered &mdash; not a quote, an offer, a rate comparison, or"
+            " financial advice, and it ignores fees, missed payments and any rate"
+            " change.</p>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("#### Two models, not one")
+        st.markdown(
+            '<p class="kyl-note">This app scores with an eight-feature prototype.'
+            " The FastAPI service behind the production interface serves a"
+            " nine-feature model that also uses county poverty share and scores"
+            " marginally higher. The two are not interchangeable and their figures"
+            " should not be quoted for one another.</p>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("#### Sources")
+        st.markdown(
+            '<ul class="kyl-list">'
+            "<li>CFPB consumer complaint database, payday loan products.</li>"
+            "<li>CFPB National Financial Well-Being Survey, public-use file.</li>"
+            '<li>Official SNAP program information:'
+            f' <a href="{esc(SNAP_OFFICIAL)}" target="_blank"'
+            f' rel="noopener noreferrer">USDA Food and Nutrition Service</a>.</li>'
+            "</ul>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="kyl-fine">Complaints are consumer-submitted reports and do'
+            " not necessarily indicate verified wrongdoing. Complaint volume is"
+            " used to communicate evidence strength; a lender is not penalised for"
+            " having more complaints, because lender-level customer and loan-volume"
+            " denominators are not available.</p>",
+            unsafe_allow_html=True,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -420,11 +487,12 @@ st.html(
     "</header>"
 )
 
-lender_tab, household_tab, calculator_tab = st.tabs(
+lender_tab, household_tab, calculator_tab, methodology_tab = st.tabs(
     [
         "Lender Complaint Profile",
         "Household Financial Context",
         "Loan Payoff Calculator",
+        "Methodology",
     ]
 )
 
@@ -443,67 +511,65 @@ with lender_tab:
     )
 
     lenders = lender_index()
-
     picked_id = st.session_state.get(LENDER_KEY)
 
-    # A real search field. live=True commits 250ms after typing stops, so results
-    # narrow as you type without pressing Enter. Results are capped at
-    # MAX_MATCHES and rendered as a short list, so nothing is buried under a
-    # scroll box and no list is shown before the user has searched for anything.
-    # There is no separate "change" control and no browse panel: this one field
-    # is the only way in, and retyping is how you change lenders.
-    query = st.text_input(
-        "Search for a lender",
-        placeholder="Start typing a lender name…",
-        key=f"{LENDER_KEY}_query",
-        live=True,
-        type="default",
-    )
+    # Search on the left, report on the right, so a profile and the control that
+    # produced it are visible at the same time and neither pushes the other down
+    # the page. Streamlit stacks the columns on narrow screens by itself.
+    search_col, report_col = st.columns([1, 2], gap="large")
 
-    needle = query.strip().lower()
-    matches = [r for r in lenders if needle in r["name"].lower()] if needle else []
-
-    if needle and not matches:
-        st.html(
-            f'<p class="kyl-note" style="margin:.5rem 0 0">No lender matches'
-            f" <b>{esc(query.strip())}</b>. Try a shorter fragment of the name.</p>"
+    with search_col:
+        # A real search field. live=True commits 250ms after typing stops, so
+        # results narrow as the user types with no Enter and no dropdown to open.
+        # Capped at MAX_MATCHES, nothing shown before searching, and this one
+        # field is the only way in: retyping is how you change lenders.
+        query = st.text_input(
+            "Search for a lender",
+            placeholder="Start typing a lender name…",
+            key=f"{LENDER_KEY}_query",
+            live=True,
         )
-    elif matches:
-        shown = matches[:MAX_MATCHES]
-        st.html(
-            f'<p class="kyl-note" style="margin:.6rem 0 .35rem">'
-            + (
-                f"{len(matches):,} match"
-                f"{'es' if len(matches) != 1 else ''} — pick one:"
-                if len(matches) > len(shown)
-                else "Pick one:"
+        needle = query.strip().lower()
+        matches = [r for r in lenders if needle in r["name"].lower()] if needle else []
+
+        if needle and not matches:
+            st.html(
+                f'<p class="kyl-note" style="margin:.5rem 0 0">No lender matches'
+                f" <b>{esc(query.strip())}</b>. Try a shorter fragment.</p>"
             )
-            + "</p>"
-        )
-        for row in shown:
-            if st.button(
-                f"{row['name']}   ·   {plural(row['n_complaints'], 'complaint')}",
-                key=f"{LENDER_KEY}_hit_{row['id']}",
-                width="stretch",
-                type="primary" if row["id"] == picked_id else "secondary",
-            ):
-                st.session_state[LENDER_KEY] = row["id"]
-                st.rerun()
+        elif matches:
+            shown = matches[:MAX_MATCHES]
+            caption = (
+                f"{len(matches):,} matches — pick one"
+                if len(matches) > len(shown)
+                else "Pick one"
+            )
+            st.html(f'<p class="kyl-note" style="margin:.6rem 0 .35rem">{caption}</p>')
+            for row in shown:
+                if st.button(
+                    f"{row['name']}   ·   {plural(row['n_complaints'], 'complaint')}",
+                    key=f"{LENDER_KEY}_hit_{row['id']}",
+                    width="stretch",
+                    type="primary" if row["id"] == picked_id else "secondary",
+                ):
+                    st.session_state[LENDER_KEY] = row["id"]
+                    st.rerun()
 
-    if picked_id is None:
-        section_card(
-            "<h3>No lender selected</h3>"
-            '<p class="kyl-note">Search for a lender above to see its complaint'
-            " profile. Every grade is a comparison against modeled payday peers,"
-            " not a safety verdict.</p>"
-        )
-    else:
-        label = get_lender(picked_id)
-        if label is None:
-            section_card("<h3>Lender not found</h3>")
+    with report_col:
+        if picked_id is None:
+            section_card(
+                "<h3>No lender selected</h3>"
+                '<p class="kyl-note">Search for a lender to see its complaint'
+                " profile. Each row is one dimension, graded against modeled payday"
+                " peers. Hover a row for the numbers behind the grade. No grade is"
+                " an official safety verdict.</p>"
+            )
         else:
-            _render_lender_report(label)
-
+            label = get_lender(picked_id)
+            if label is None:
+                section_card("<h3>Lender not found</h3>")
+            else:
+                _render_lender_report(label)
 
 # ==========================================================================
 # 2. Household Financial Context
@@ -560,9 +626,7 @@ with calculator_tab:
     st.html(
         '<div style="margin:1.5rem 0 1rem">'
         "<h2>Loan Payoff Calculator</h2>"
-        '<p class="kyl-note">Work out how long a loan takes to clear and what it'
-        " costs. This is arithmetic on the numbers you enter; it is not a quote,"
-        " an offer, or financial advice.</p>"
+        '<p class="kyl-note">Estimated payoff time and total cost for a loan.</p>' 
         "</div>"
     )
 
@@ -650,38 +714,21 @@ with calculator_tab:
                     "Interest as share of payments", f"{interest_share:.1f}%"
                 )
 
-            if total_interest > 0:
-                alert(
-                    "info",
-                    "Cost breakdown:",
-                    f"{interest_share:.1f}% of everything you pay goes to interest"
-                    f" rather than reducing the balance. On ${principal:,.2f} at"
-                    f" {apr:.2f}% APR, paying ${payment:,.2f} a month clears the loan"
-                    f" in {months} months.",
-                )
-            else:
-                alert(
-                    "success",
-                    "No interest charged:",
-                    f"at an APR of 0% this loan clears in {months} months with no"
-                    " interest cost.",
-                )
 
 # --------------------------------------------------------------------------
 # Footer
 # --------------------------------------------------------------------------
 st.html(
     '<footer class="kyl-foot">'
-    "<p><b>Know Your Lender</b> draws on two public sources. The lender complaint"
-    " profile is derived from CFPB consumer complaint data; the household estimate"
-    " comes from the CFPB National Financial Well-Being Survey.</p>"
-    "<p>Complaints are consumer-submitted reports and do not necessarily indicate"
-    " verified wrongdoing. Complaint volume indicates how much evidence supports a"
-    " grade, not how many customers a lender has or how much misconduct it commits."
-    " A lender is not penalised for having more complaints.</p>"
-    "<p>Grades are relative comparisons against modeled payday peers, shown per"
-    " dimension, and there is no overall score. The household estimate is a survey"
-    " association from 2016, not an eligibility determination, a forecast, or"
-    " advice. The loan calculator is arithmetic on your inputs.</p>"
-    "</footer>"
+    "Know Your Lender &middot; CFPB consumer complaint data and the CFPB National"
+    " Financial Well-Being Survey &middot; figures are peer-relative comparisons"
+    " and survey associations, not official determinations &middot; see the"
+    " Methodology tab.</footer>"
 )
+
+
+# ==========================================================================
+# 4. Methodology
+# ==========================================================================
+with methodology_tab:
+    _render_methodology()

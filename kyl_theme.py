@@ -281,15 +281,6 @@ a {{ color: {t['primary']}; }}
 .kyl-card > *:first-child {{ margin-top: 0; }}
 .kyl-card > *:last-child {{ margin-bottom: 0; }}
 
-/* Lender header: name, counts, evidence badge on one wrapping row. */
-.kyl-lender-head {{
-  display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: .5rem .9rem; margin: 0 0 .2rem;
-}}
-.kyl-lender-name {{
-  font-size: 1.5rem; font-weight: 700; color: {t['text']};
-  letter-spacing: -.01em; overflow-wrap: anywhere; min-width: 0;
-}}
 .kyl-badge {{
   display: inline-flex; align-items: center; gap: .35rem;
   background: {t['primary_soft']}; color: {t['primary']};
@@ -297,42 +288,6 @@ a {{ color: {t['primary']}; }}
   padding: .18rem .6rem; font-size: .78rem; font-weight: 600; white-space: nowrap;
 }}
 .kyl-meta {{ color: {t['muted']}; font-size: .875rem; }}
-.kyl-meta b {{ color: {t['text']}; font-weight: 600; }}
-
-/* Grade cards: 3 across on desktop, 2 on tablet, 1 on mobile. */
-.kyl-grades {{
-  display: grid; gap: .85rem; margin: .3rem 0 .2rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}}
-@media (max-width: 1024px) {{ .kyl-grades {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
-@media (max-width: 768px)  {{ .kyl-grides {{ grid-template-columns: minmax(0, 1fr); }} }}
-
-.kyl-grade {{
-  background: var(--kyl-card); border: 1px solid var(--kyl-border);
-  border-radius: {t['radius']}; padding: 1rem 1.1rem;
-  display: flex; flex-direction: column; gap: .1rem; min-width: 0;
-  /* No transition on anything that changes size: hover must not shift layout. */
-}}
-.kyl-grade:hover {{ border-color: var(--kyl-edge); }}
-.kyl-grade:focus-within {{ outline: 3px solid {t['primary']}; outline-offset: 2px; }}
-.kyl-grade-name {{
-  font-size: .8rem; font-weight: 700; letter-spacing: .04em;
-  text-transform: uppercase; color: {t['muted']}; line-height: 1.3;
-  overflow-wrap: anywhere;
-}}
-.kyl-grade-row {{ display: flex; align-items: center; gap: .6rem; margin: .35rem 0 .1rem; }}
-.kyl-letter {{
-  font-size: 2.6rem; line-height: 1; font-weight: 700; letter-spacing: -.02em;
-}}
-.kyl-grade-word {{ font-size: .78rem; font-weight: 700; letter-spacing: .03em;
-  text-transform: uppercase; }}
-.kyl-compare {{ font-size: .9rem; line-height: 1.45; color: {t['text']}; margin: .3rem 0 0; }}
-.kyl-facts {{
-  margin: .55rem 0 0; padding-top: .55rem; border-top: 1px solid {t['border']};
-  font-size: .8rem; line-height: 1.55; color: {t['muted']};
-}}
-.kyl-facts div {{ display: flex; justify-content: space-between; gap: .75rem; }}
-.kyl-facts span:last-child {{ color: {t['text']}; font-weight: 600; text-align: right; }}
 
 /* The only bar in the interface, and it is explicitly labelled: 0 and 100 at the
    ends with the peer reference marked. No unlabelled meters anywhere. */
@@ -368,11 +323,91 @@ a {{ color: {t['primary']}; }}
 .kyl-alert-success {{ background: {t['success_soft']}; border-color: #A9E5C3; color: #054F31; }}
 .kyl-alert-success b {{ color: {t['success']}; }}
 
+/* ------------------------------------------------- the report card itself */
+/* One card, five rows, in the shape of a printed report card: subject on the
+   left, grade on the right, hairline between rows.
+
+   The numbers live in an absolutely positioned overlay revealed on hover and on
+   focus. Absolutely positioned is the whole point: an overlay takes no part in
+   layout, so revealing it cannot shift the rows, the card, or anything below.
+   A disclosure that expanded in place would do exactly that, which is what the
+   per-dimension <details> elements did before. */
+.kyl-report {{
+  background: {t['card']}; border: 1px solid {t['border']};
+  border-radius: {t['radius']};
+}}
+.kyl-report-head {{
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  justify-content: space-between; gap: .4rem .9rem;
+  padding: 1.1rem 1.25rem; border-bottom: 1px solid {t['border']};
+}}
+.kyl-report-name {{
+  font-size: 1.35rem; font-weight: 700; letter-spacing: -.01em;
+  color: {t['text']}; margin: 0; overflow-wrap: anywhere; min-width: 0;
+}}
+.kyl-rowcard {{
+  position: relative; display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .2rem 1rem; align-items: center;
+  padding: .8rem 1.25rem; border-bottom: 1px solid {t['border']};
+}}
+.kyl-rowcard:last-child {{ border-bottom: none; }}
+.kyl-rowcard:hover {{ background: {t['bg']}; }}
+.kyl-rowcard:focus-visible {{
+  outline: 3px solid {t['primary']}; outline-offset: -3px;
+}}
+.kyl-rowcard-name {{
+  display: block; font-size: .72rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: {t['muted']}; line-height: 1.35;
+}}
+.kyl-rowcard-cmp {{
+  display: block; font-size: .925rem; line-height: 1.45; color: {t['text']};
+  margin-top: .1rem;
+}}
+.kyl-rowcard-grade {{ display: flex; align-items: center; gap: .5rem; }}
+.kyl-rowcard-word {{
+  font-size: .68rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; line-height: 1.2; max-width: 5.5rem;
+}}
+.kyl-letter {{ font-size: 2.1rem; line-height: 1; font-weight: 700; }}
+/* The hover overlay. */
+.kyl-rowcard-detail {{
+  position: absolute; left: .6rem; right: .6rem; top: calc(100% - .3rem);
+  z-index: 30; background: {t['card']};
+  border: 1px solid {t['border_strong']};
+  border-left: 3px solid var(--kyl-edge, {t['primary']});
+  border-radius: {t['radius_sm']};
+  box-shadow: 0 8px 24px rgba(16, 24, 40, .13);
+  padding: .75rem .9rem;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  font-size: .8rem; line-height: 1.5; color: {t['muted']};
+  transition: opacity .1s ease;
+}}
+.kyl-rowcard:hover .kyl-rowcard-detail,
+.kyl-rowcard:focus-within .kyl-rowcard-detail {{
+  opacity: 1; visibility: visible;
+}}
+.kyl-rowcard-detail dl {{
+  margin: 0; display: grid; grid-template-columns: auto 1fr;
+  gap: .1rem .8rem;
+}}
+.kyl-rowcard-detail dt {{ color: {t['muted']}; }}
+.kyl-rowcard-detail dd {{
+  margin: 0; color: {t['text']}; font-weight: 600; text-align: right;
+}}
+.kyl-rowcard-detail .kyl-scale {{ margin-top: .55rem; }}
+.kyl-rowcard-detail p {{ margin: .5rem 0 0; }}
+@media (max-width: 768px) {{
+  .kyl-rowcard {{ padding: .75rem 1rem; }}
+  .kyl-report-head {{ padding: 1rem; }}
+  .kyl-rowcard-detail {{ left: .35rem; right: .35rem; }}
+}}
+
 /* Result readout after a successful estimate. */
-.kyl-outcome-val {{ font-size: 2.1rem; font-weight: 700; color: {t['text']};
-  letter-spacing: -.02em; line-height: 1.15; }}
 .kyl-outcome-lab {{ font-size: .8rem; font-weight: 700; letter-spacing: .04em;
   text-transform: uppercase; color: {t['muted']}; margin-bottom: .2rem; }}
+.kyl-outcome-val {{ font-size: 2.1rem; font-weight: 700; color: {t['text']};
+  letter-spacing: -.02em; line-height: 1.15; }}
 .kyl-outcome-note {{ font-size: .875rem; color: {t['muted']}; line-height: 1.6; margin-top: .5rem; }}
 .kyl-list {{ margin: .4rem 0 0; padding-left: 1.1rem; }}
 .kyl-list li {{ font-size: .875rem; line-height: 1.6; color: {t['muted']}; margin-bottom: .2rem; }}
