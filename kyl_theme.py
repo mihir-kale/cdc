@@ -76,20 +76,26 @@ html, body, [data-testid="stAppViewContainer"] {{
   color: {t['text']};
 }}
 /* Cap the measure and centre it. Also the horizontal-overflow guard: the main
-   block never exceeds maxw, and padding steps down on small screens. */
+   block never exceeds maxw, and padding steps down on small screens. The
+   top padding clears Streamlit's own toolbar, which was overlapping the
+   product wordmark and clipping the top of the page heading. */
 .block-container {{
   max-width: {t['maxw']};
-  padding: {t['pad']} 1.5rem {t['pad']} 1.5rem;
+  padding: 3.25rem 1.5rem {t['pad']} 1.5rem;
 }}
 @media (max-width: 768px) {{
-  .block-container {{ padding: {t['pad_mobile']} 1rem 2rem 1rem; }}
+  .block-container {{ padding: 2.5rem 1rem 2rem 1rem; }}
 }}
 h1, h2, h3, h4, h5, h6, p, label, span, div, button, input, li, td, th {{
   font-family: {t['font']};
 }}
 /* Nothing may introduce sideways scroll at 375px. Long lender names and the
-   comparison rows wrap instead of pushing the page wide. */
-html, body, [data-testid="stAppViewContainer"] {{ overflow-x: hidden; }}
+   comparison rows wrap instead of pushing the page wide.
+
+   `clip` rather than `hidden`: overflow-x:hidden on html/body silently promotes
+   them to scroll containers, which clipped the top of the page heading. `clip`
+   suppresses the horizontal overflow without creating a scroll box. */
+html, body, [data-testid="stAppViewContainer"] {{ overflow-x: clip; }}
 [data-testid="stAppViewContainer"] > * {{ min-width: 0; }}
 p, li, td, .kyl-wrap {{ overflow-wrap: anywhere; word-break: break-word; }}
 
@@ -116,18 +122,21 @@ a {{ color: {t['primary']}; }}
 
 /* ------------------------------------------------------------------- nav */
 /* Tabs are the navigation. Scoped by role/aria so the selected state is styled
-   from the accessibility attribute rather than a generated class. */
+   from the accessibility attribute rather than a generated class. The gap and
+   padding are generous: at .25rem the three tabs read as one run of text
+   rather than as separate destinations. */
 [data-testid="stTabs"] [role="tablist"] {{
-  gap: .25rem; border-bottom: 1px solid {t['border']};
+  gap: .6rem; border-bottom: 1px solid {t['border']}; padding-bottom: 0;
   overflow-x: auto; scrollbar-width: thin; flex-wrap: nowrap;
   -webkit-overflow-scrolling: touch;
 }}
 [data-testid="stTabs"] [role="tablist"] button {{
-  flex: 1 1 0; min-width: max-content; min-height: {t['tap']};
+  flex: 1 1 auto; min-width: max-content; min-height: {t['tap']};
   background: transparent; color: {t['muted']};
   border: 1px solid transparent; border-bottom: 2px solid transparent;
   border-radius: {t['radius_sm']} {t['radius_sm']} 0 0;
-  font-size: .95rem; font-weight: 600; padding: .6rem .9rem;
+  font-size: .95rem; font-weight: 600; padding: .7rem 1.1rem;
+  margin-bottom: -1px;
   transition: background-color .12s ease, color .12s ease;
 }}
 [data-testid="stTabs"] [role="tablist"] button:hover {{

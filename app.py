@@ -62,7 +62,6 @@ if _spec is None or _spec.loader is None:  # pragma: no cover
 _label_store = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_label_store)
 
-dataset_summary = _label_store.dataset_summary
 get_lender = _label_store.get_lender
 lender_index = _label_store.lender_index
 
@@ -142,6 +141,9 @@ MARITAL = [
 METRO = ["Yes", "No"]
 
 LENDER_KEY = "kyl_lender"
+# Search results shown at once. Small enough to stay above the fold, so the
+# report card is never buried under a scroll box.
+MAX_MATCHES = 6
 HOUSEHOLD_FORM_KEY = "kyl_household_form"
 
 # The official SNAP program page. The model is not this, and the copy says so;
@@ -440,82 +442,58 @@ with lender_tab:
         "</div>"
     )
 
-    summary = dataset_summary()
-    st.html(
-        f'<p class="kyl-note" style="margin:0 0 .9rem">'
-        f"{esc(summary['lender_count'])} lenders · "
-        f"{esc(summary['total_complaints'])} complaints in this dataset · "
-        f"method {esc(summary['method'])}</p>"
-    )
-
     lenders = lender_index()
-    by_name = {row["name"]: row for row in lenders}
 
     picked_id = st.session_state.get(LENDER_KEY)
 
-    # A native searchable combobox. filter_mode makes it match as the user
-    # types, so no Enter is needed, and the menu closes on selection because
-    # that is a selectbox's own behaviour. index=None means nothing is
-    # preselected and the 25-most-complained list is never rendered by default.
-    chosen_name = st.selectbox(
+    # A real search field. live=True commits 250ms after typing stops, so results
+    # narrow as you type without pressing Enter. Results are capped at
+    # MAX_MATCHES and rendered as a short list, so nothing is buried under a
+    # scroll box and no list is shown before the user has searched for anything.
+    # There is no separate "change" control and no browse panel: this one field
+    # is the only way in, and retyping is how you change lenders.
+    query = st.text_input(
         "Search for a lender",
-        options=list(by_name),
-        index=None,
-        placeholder="Start typing a lender name",
-        filter_mode="contains",
-        key=f"{LENDER_KEY}_combo",
-        format_func=lambda n: f"{n}  ·  {plural(by_name[n]['n_complaints'], 'complaint')}",
-        help="Type any part of a lender's name. Matches as you type.",
+        placeholder="Start typing a lender name…",
+        key=f"{LENDER_KEY}_query",
+        live=True,
+        type="default",
     )
 
-    if chosen_name is None and picked_id is not None:
-        # "Change lender" was pressed: keep the report card but reopen the picker.
-        chosen_name = None
+    needle = query.strip().lower()
+    matches = [r for r in lenders if needle in r["name"].lower()] if needle else []
 
-    if chosen_name is not None:
-        st.session_state[LENDER_KEY] = by_name[chosen_name]["id"]
-        picked_id = by_name[chosen_name]["id"]
-
-    change_col, browse_col = st.columns([1, 1])
-
-    with change_col:
-        if picked_id is not None:
-            if st.button("Change lender", key=f"{LENDER_KEY}_change", width="stretch"):
-                st.session_state[LENDER_KEY] = None
-                st.session_state.pop(f"{LENDER_KEY}_combo", None)
-                st.rerun()
-
-    with browse_col:
-        # Optional browsing, deliberately collapsed so it never pushes the
-        # analysis below the fold. Sorting lives in here rather than beside the
-        # primary search.
-        with st.expander("Browse popular lenders"):
-            browse_sort = st.selectbox(
-                "Order",
-                ["Most complaints", "Name (A–Z)", "Fewest complaints"],
-                key=f"{LENDER_KEY}_sort",
+    if needle and not matches:
+        st.html(
+            f'<p class="kyl-note" style="margin:.5rem 0 0">No lender matches'
+            f" <b>{esc(query.strip())}</b>. Try a shorter fragment of the name.</p>"
+        )
+    elif matches:
+        shown = matches[:MAX_MATCHES]
+        st.html(
+            f'<p class="kyl-note" style="margin:.6rem 0 .35rem">'
+            + (
+                f"{len(matches):,} match"
+                f"{'es' if len(matches) != 1 else ''} — pick one:"
+                if len(matches) > len(shown)
+                else "Pick one:"
             )
-            pool = list(lenders)
-            if browse_sort == "Name (A–Z)":
-                pool.sort(key=lambda r: r["name"].lower())
-            elif browse_sort == "Fewest complaints":
-                pool.sort(key=lambda r: r["n_complaints"])
-            else:
-                pool.sort(key=lambda r: -r["n_complaints"])
-            pool = pool[:8]
-            for row in pool:
-                if st.button(
-                    f"{row['name']}  ·  {plural(row['n_complaints'], 'complaint')}",
-                    key=f"{LENDER_KEY}_pick_{row['id']}",
-                    width="stretch",
-                ):
-                    st.session_state[LENDER_KEY] = row["id"]
-                    st.rerun()
+            + "</p>"
+        )
+        for row in shown:
+            if st.button(
+                f"{row['name']}   ·   {plural(row['n_complaints'], 'complaint')}",
+                key=f"{LENDER_KEY}_hit_{row['id']}",
+                width="stretch",
+                type="primary" if row["id"] == picked_id else "secondary",
+            ):
+                st.session_state[LENDER_KEY] = row["id"]
+                st.rerun()
 
     if picked_id is None:
         section_card(
             "<h3>No lender selected</h3>"
-            '<p class="kyl-note">Search above for a lender to see its complaint'
+            '<p class="kyl-note">Search for a lender above to see its complaint'
             " profile. Every grade is a comparison against modeled payday peers,"
             " not a safety verdict.</p>"
         )
