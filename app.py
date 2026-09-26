@@ -1,3 +1,36 @@
+"""Know Your Lender — a Streamlit front end for the FinePrint analysis.
+
+Three tools, deliberately kept apart because they answer different questions
+from different data:
+
+  1. Lender Complaint Profile  -- CFPB complaint patterns for one lender,
+     scored against modelled payday peers. Reused from the FastAPI service via
+     ``app.label_store`` so both surfaces read one committed artifact.
+  2. Household Financial Context -- a survey-based estimate, described in
+     survey terms. Not an eligibility determination.
+  3. Loan Payoff Calculator      -- plain amortisation arithmetic.
+
+Statistical behaviour is unchanged from the previous version: the grade band cut
+points, the categorical casting contract, the loan arithmetic and the model
+feature vector are all preserved. Only presentation and interaction changed.
+
+Presentation notes that matter when editing this file:
+
+* Custom components go through ``st.html``, not ``st.markdown``. ``st.html``
+  does not parse Markdown or LaTeX, so a dollar amount renders as ``$10.00``
+  rather than opening a maths span, and ``**`` never leaks through as literal
+  asterisks. The previous version used ``st.write`` and produced both artefacts.
+* All styling lives in ``kyl_theme.stylesheet()`` and is scoped by
+  ``data-testid`` / ``role`` / ``aria-*``. Do not add generated emotion class
+  names; they move between Streamlit releases.
+* The theme in ``.streamlit/config.toml`` used to set ``primaryColor`` to
+  ``#FFFFFF``, which made the selected tab and the primary button white on
+  white. It is corrected there and mirrored in ``kyl_theme.TOKENS``.
+"""
+
+from __future__ import annotations
+
+import html
 import math
 import sys
 from pathlib import Path
@@ -6,168 +39,111 @@ import pandas as pd
 import streamlit as st
 import xgboost as xgb
 
-# The lender Safety Label is reused from the FastAPI service rather than
-# reimplemented, so both surfaces render byte-identical numbers off one
-# committed artifact. label_store is standard-library only, so this adds no
-# dependency to the Streamlit app. It resolves the artifact relative to its own
-# file, so the working directory does not matter.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
-from app.label_store import dataset_summary, get_lender, lender_index
 
-# Peer-anchored A-F bands, mirroring frontend/src/lib/grades.ts. Method C puts a
-# typical modelled payday peer at exactly 50, so 50 is the C/D boundary; the
-# other cuts sit in gaps in the observed distribution rather than at even
-# intervals. Across all 2,410 dimension-scores that gives A 18.3%, B 17.6%,
-# C 34.7%, D 3.2%, E 5.8%, F 20.4%. Evenly spaced cuts would put 72.9% of every
-# dimension in F while the model calls 91% of them indistinguishable from peers.
+from app.label_store import dataset_summary, get_lender, lender_index  # noqa: E402
+from kyl_theme import GRADE_STYLE, TOKENS, stylesheet  # noqa: E402
+
+# --------------------------------------------------------------------------
+# Data and model constants. Unchanged from the previous version on purpose.
+# --------------------------------------------------------------------------
+
+SNAP_MODEL_PATH = "snap_xgboost.json"
+
+# Peer-anchored A-F bands, mirroring frontend/src/lib/grades.ts. Method C puts
+# a typical modelled payday peer at exactly 50, so 50 is the C/D boundary; the
+# remaining cuts sit in gaps in the observed distribution rather than at even
+# intervals. Across all 2,410 dimension-scores in the committed artifact that
+# gives A 18.3%, B 17.6%, C 34.7%, D 3.2%, E 5.8%, F 20.4%. Evenly spaced cuts
+# would put 72.9% of every dimension in F while the model itself calls 91% of
+# them indistinguishable from peers.
 #
-# These are relative and per-dimension. There is deliberately no overall grade,
-# because the five dimensions overlap, and no red/green: the CFPB has classified
-# no lender as safe or unsafe, so the letter and the descriptor carry the
-# meaning. Keep in sync with grades.ts if either changes.
+# These are relative, per-dimension bands. There is deliberately no overall
+# grade: the five dimensions overlap, so one number would hide that.
 GRADE_BANDS = [
-    (65.0, "A", "Much more favorable than peers"),
-    (57.5, "B", "More favorable than peers"),
-    (50.0, "C", "About average for peers"),
-    (40.0, "D", "Somewhat less favorable than peers"),
-    (30.0, "E", "Less favorable than peers"),
-    (0.0, "F", "Much less favorable than peers"),
+    (65.0, "A", "Much more favorable than modeled payday peers"),
+    (57.5, "B", "More favorable than modeled payday peers"),
+    (50.0, "C", "About average for modeled payday peers"),
+    (40.0, "D", "Somewhat less favorable than modeled payday peers"),
+    (30.0, "E", "Less favorable than modeled payday peers"),
+    (0.0, "F", "Much less favorable than modeled payday peers"),
 ]
 
 COMPARISON_TEXT = {
-    "more": "More of these complaints than typical payday peers",
-    "fewer": "Fewer of these complaints than typical payday peers",
-    "similar": "Too close to typical payday peers to tell",
+    "more": "More of these complaints than typical peers",
+    "fewer": "Fewer of these complaints than typical peers",
+    "similar": "Too close to typical peers to tell",
 }
 
-MAX_RESULTS = 25
-
-# Session-state key for the lender picker. Declared here because the candidate
-# list is rebuilt on every keystroke, and the widget's stored value has to be
-# reconciled against it before the widget is created.
-LENDER_PICK_KEY = "fp_lender_choice"
-
-# Report-card styling. One hue, six steps: the shade tracks the band and the
-# letter carries the meaning. Deliberately not red/green -- the CFPB has not
-# classified any lender as safe or unsafe, so a traffic light would assert
-# something the data cannot support. Detail is hidden until hover so the card
-# reads as five grades at a glance.
-REPORT_CARD_CSS = """
-<style>
-.fp-card-head{display:flex;align-items:baseline;justify-content:space-between;
-  gap:1rem;flex-wrap:wrap;margin:.25rem 0 .1rem}
-.fp-card-name{font-size:1.45rem;font-weight:700;color:#111827;letter-spacing:-.01em}
-.fp-card-meta{font-size:.8rem;color:#6b7280;white-space:nowrap}
-.fp-row{display:flex;align-items:center;gap:.75rem;padding:.45rem 0;
-  border-bottom:1px solid #f3f4f6;font-size:.82rem;color:#6b7280}
-.fp-row:last-of-type{border-bottom:none}
-.fp-evidence{flex:1 1 auto;min-width:0}
-.fp-bar{flex:0 0 34%;height:.4rem;background:#f3f4f6;border-radius:999px;overflow:hidden}
-.fp-bar span{display:block;height:100%;background:#6366f1;border-radius:999px}
-.fp-tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
-  gap:.6rem;margin:.9rem 0 .2rem;align-items:start}
-.fp-tile{border:1px solid #e5e7eb;border-radius:.6rem;padding:.85rem .4rem .7rem;
-  text-align:center;background:#fff;transition:border-color .12s,box-shadow .12s}
-.fp-tile:hover{border-color:#6366f1;box-shadow:0 1px 8px rgba(79,70,229,.14)}
-.fp-tile-name{font-size:.63rem;line-height:1.25;color:#6b7280;margin-top:.45rem;
-  text-transform:uppercase;letter-spacing:.04em}
-.fp-letter{font-size:2.1rem;line-height:1;font-weight:700}
-.fp-what{font-size:.68rem;line-height:1.3;margin-top:.3rem;min-height:2.4em}
-.fp-detail{visibility:hidden;opacity:0;max-height:0;overflow:hidden;
-  transition:opacity .12s;margin-top:.5rem;padding-top:.5rem;
-  border-top:1px dashed #e5e7eb;font-size:.68rem;line-height:1.45;color:#4b5563;
-  text-align:left}
-/* :focus mirrors :hover so the numbers are reachable by keyboard and by tap.
-   Hover alone would hide them from anyone on a phone, or anyone tabbing. */
-.fp-tile:hover .fp-detail,.fp-tile:focus .fp-detail,
-.fp-tile:focus-within .fp-detail{visibility:visible;opacity:1;max-height:14rem}
-.fp-tile:hover .fp-what,.fp-tile:focus .fp-what{visibility:hidden}
-.fp-tile:focus{outline:2px solid #6366f1;outline-offset:2px}
-.fp-k{color:#9ca3af}
-.fp-foot{margin-top:.9rem;padding-top:.7rem;border-top:1px solid #e5e7eb;
-  font-size:.72rem;color:#6b7280;line-height:1.5}
-</style>
-"""
-
-# Shade per band, light for the weakest. Paired with a readable text colour so
-# the letter keeps its contrast on the lighter steps.
-BAND_SHADE = {
-    "A": ("#e0e7ff", "#3730a3"),
-    "B": ("#c7d2fe", "#3730a3"),
-    "C": ("#eef2ff", "#4338ca"),
-    "D": ("#e0e7ff", "#4338ca"),
-    "E": ("#f5f3ff", "#4f46e5"),
-    "F": ("#faf5ff", "#5b21b6"),
+# The complete category set for each categorical feature, in the order xgboost
+# saw them at training time. Declared explicitly because a bare
+# astype("category") on a one-row frame derives its categories from that single
+# row, so a household aged 45-54 would be sent as category code 0 and silently
+# route the prediction through the wrong branch of every categorical split.
+# Same constant and same reasoning as backend/app/financial_impact.py.
+CATEGORICAL_CATEGORIES = {
+    "agecat": [1, 2, 3, 4, 5, 6, 7, 8],
+    "PPEDUC": [1, 2, 3, 4, 5],
+    "PPINCIMP": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "PPMARIT": [1, 2, 3, 4, 5],
+    "PPMSACAT": [0, 1],
 }
 
+AGE_BANDS = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+", "75+"]
+EDUCATION = [
+    "Less than High School",
+    "High School",
+    "Associate's Degree",
+    "Bachelor's Degree",
+    "Graduate or Professional Degree",
+]
+INCOME = [
+    "Less than $20,000",
+    "$20,000 to $29,999",
+    "$30,000 to $39,999",
+    "$40,000 to $49,999",
+    "$50,000 to $59,999",
+    "$60,000 to $74,999",
+    "$75,000 to $99,999",
+    "$100,000 to $149,999",
+    "$150,000 or more",
+]
+MARITAL = [
+    "Married",
+    "Widowed",
+    "Divorced/Separated",
+    "Never married",
+    "Living with partner",
+]
+METRO = ["Yes", "No"]
 
-def _esc(text: str) -> str:
-    return (
-        str(text)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+LENDER_KEY = "kyl_lender"
+HOUSEHOLD_FORM_KEY = "kyl_household_form"
+
+# The official SNAP program page. The model is not this, and the copy says so;
+# the link exists so a reader has somewhere authoritative to go.
+SNAP_OFFICIAL = "https://www.fns.usda.gov/snap"
 
 
-def render_report_card(label: dict) -> None:
-    """Five grades at a glance; per-grade numbers on hover."""
-    st.markdown(REPORT_CARD_CSS, unsafe_allow_html=True)
+# --------------------------------------------------------------------------
+# Small helpers
+# --------------------------------------------------------------------------
 
-    tiles = []
-    for slug, dim in label["dimensions"].items():
-        letter, descriptor = grade_for(dim["score"])
-        bg, fg = BAND_SHADE[letter]
-        comparison = COMPARISON_TEXT[dim["comparison"]]
-        detail = (
-            f'<div class="fp-detail">'
-            f'<span class="fp-k">Score</span> {dim["score"]:.1f} of 100'
-            f' &middot; peer reference 50<br>'
-            f'<span class="fp-k">Complaints</span> {dim["complaints"]:,}<br>'
-            f'<span class="fp-k">Estimated rate</span> {dim["prevalence"] * 100:.1f}%'
-            f' <span class="fp-k">(90% credible interval</span> '
-            f'{dim["prevalence_lo90"] * 100:.1f}&ndash;{dim["prevalence_hi90"] * 100:.1f}%<span class="fp-k">)</span><br>'
-            f'<span class="fp-k">vs peers</span> {_esc(comparison)}'
-            f"</div>"
-        )
-        tiles.append(
-            f'<div class="fp-tile" tabindex="0" '
-            f'aria-label="{_esc(dim["label"])}: grade {letter}, {_esc(descriptor)}" '
-            f'title="{_esc(comparison)}">'
-            f'<div class="fp-letter" style="color:{fg}">{letter}</div>'
-            f'<div class="fp-tile-name">{_esc(dim["label"])}</div>'
-            f'<div class="fp-what">{_esc(descriptor)}</div>'
-            f"{detail}</div>"
-        )
 
-    rows = []
-    for dim in label["dimensions"].values():
-        pct = min(100.0, max(0.0, dim["score"]))
-        rows.append(
-            f'<div class="fp-row"><span class="fp-evidence">'
-            f'{_esc(COMPARISON_TEXT[dim["comparison"]])}</span>'
-            f'<span class="fp-bar"><span style="width:{pct:.0f}%"></span></span></div>'
-        )
+def esc(value: object) -> str:
+    """HTML-escape. Everything interpolated into st.html goes through this."""
+    return html.escape(str(value), quote=True)
 
-    st.markdown(
-        f'<div class="fp-card-head">'
-        f'<span class="fp-card-name">{_esc(label["name"])}</span>'
-        f'<span class="fp-card-meta">{label["n_complaints"]:,} CFPB payday complaints'
-        f' &middot; {_esc(label["evidence"])}</span></div>'
-        f'<div class="fp-tiles">{"".join(tiles)}</div>'
-        f'<div>{"".join(rows)}</div>'
-        f'<div class="fp-foot">Grades are per dimension, and there is no overall grade: '
-        f'the five overlap, so one number would hide that. Each letter is a band on a '
-        f'shrunk estimate relative to modeled peers, not a verdict &mdash; the CFPB has '
-        f'classified no lender as safe or unsafe. Hover a tile for its numbers.'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+
+def plural(n: int, singular: str, plural_form: str | None = None) -> str:
+    """'1 complaint' / '2 complaints'. Fixes the '1 complaints' defect."""
+    word = singular if n == 1 else (plural_form or f"{singular}s")
+    return f"{n:,} {word}"
 
 
 def grade_for(score: float) -> tuple[str, str]:
-    """Return (letter, descriptor) for a 0-100 score. Out-of-range is clamped."""
+    """Return ``(letter, descriptor)`` for a 0-100 score, clamping outliers."""
     clamped = max(0.0, min(100.0, float(score)))
     for minimum, letter, descriptor in GRADE_BANDS:
         if clamped >= minimum:
@@ -175,270 +151,536 @@ def grade_for(score: float) -> tuple[str, str]:
     return "F", GRADE_BANDS[-1][2]
 
 
-st.set_page_config(
-    page_title="PayWatch", 
-    page_icon=":clapper:", 
-    layout="wide"
+def alert(kind: str, title: str, body: str) -> None:
+    """A rendered alert.
+
+    Uses ``st.html`` so dollar amounts are never treated as LaTeX and ``**``
+    never appears literally. ``kind`` is danger | warning | info | success.
+    """
+    st.html(
+        f'<div class="kyl-alert kyl-alert-{esc(kind)}" role="note">'
+        f"<div><b>{esc(title)}</b> {esc(body)}</div></div>"
     )
 
-st.title("PayWatch")
 
-st.caption(
-    "Two independent analyses, neither derived from the other: a CFPB complaint profile for a lender, and a survey position for a household."
+def section_card(inner_html: str) -> None:
+    st.html(f'<section class="kyl-card">{inner_html}</section>')
+
+
+def _render_lender_report(label: dict) -> None:
+    """Name, counts, evidence badge, five grade cards, methodology accordion."""
+    # 1-3: identity, complaint count, evidence badge.
+    section_card(
+        '<div class="kyl-lender-head">'
+        f'<span class="kyl-lender-name">{esc(label["name"])}</span>'
+        f'<span class="kyl-badge">Evidence: {esc(label["evidence"])}</span></div>'
+        f'<p class="kyl-meta">'
+        f'<b>{esc(plural(label["n_complaints"], "complaint"))}</b> in this dataset'
+        f" &middot; {esc(label['methodology']['direction'])}</p>"
+    )
+
+    # 4: the five grade cards.
+    cards = []
+    for slug, dim in label["dimensions"].items():
+        letter, descriptor = grade_for(dim["score"])
+        style = GRADE_STYLE[letter]
+        pct = min(100.0, max(0.0, dim["score"]))
+
+        facts = [("Complaints", f"{dim['complaints']:,}")]
+        if dim.get("prevalence") is not None:
+            facts.append(
+                (
+                    "Estimated rate",
+                    f"{dim['prevalence'] * 100:.1f}%",
+                )
+            )
+            facts.append(
+                (
+                    "90% interval",
+                    f"{dim['prevalence_lo90'] * 100:.1f}–"
+                    f"{dim['prevalence_hi90'] * 100:.1f}%",
+                )
+            )
+        facts.append(("Verdict", COMPARISON_TEXT[dim["comparison"]]))
+
+        fact_rows = "".join(
+            f"<div><span>{esc(k)}</span><span>{esc(v)}</span></div>" for k, v in facts
+        )
+
+        # The scale is explicitly labelled at both ends with the peer reference
+        # marked, because an unlabelled bar asserts nothing.
+        scale = (
+            '<div class="kyl-scale">'
+            f'<div class="kyl-scale-track">'
+            f'<span class="kyl-scale-fill" style="width:{pct:.1f}%;'
+            f'background:{style["fg"]}"></span>'
+            '<span class="kyl-scale-peer" style="left:50%"></span>'
+            "</div>"
+            '<div class="kyl-scale-legend">'
+            "<span>0 &middot; least favorable</span>"
+            "<span>peers sit at 50</span>"
+            "<span>100 &middot; most</span>"
+            "</div></div>"
+        )
+
+        # Native <details> disclosure: keyboard operable, no JS, and it only
+        # expands when the reader asks, so nothing shifts on hover.
+        details = (
+            "<details><summary>View details</summary>"
+            f'<p class="kyl-fine">Raw score {dim["score"]:.1f} of 100.'
+            f' Modeled peer rate for this complaint type is'
+            f' {dim.get("peer_rate", float("nan")) * 100:.2f}% of complaints'
+            f" received by a modeled peer. Shrinkage pulls small samples toward"
+            f" the middle, so an extreme score on thin evidence is not an extreme"
+            f" lender.</p></details>"
+        )
+
+        cards.append(
+            f'<article class="kyl-grade" style="--kyl-card:{style["bg"]};'
+            f'--kyl-border:{style["edge"]};--kyl-edge:{style["fg"]}">'
+            f'<h4 class="kyl-grade-name">{esc(dim["label"])}</h4>'
+            '<div class="kyl-grade-row">'
+            f'<span class="kyl-letter" style="color:{style["fg"]}">{letter}</span>'
+            f'<span class="kyl-grade-word" style="color:{style["fg"]}">'
+            f'{style["word"]}</span></div>'
+            f'<p class="kyl-compare">{esc(descriptor)}</p>'
+            f'<div class="kyl-facts">{fact_rows}</div>'
+            f"{scale}{details}</article>"
+        )
+
+    st.html(f'<div class="kyl-grades">{"".join(cards)}</div>')
+
+    # 5: methodology / disclaimer accordion.
+    caveats = "".join(f"<li>{esc(c)}</li>" for c in label["methodology"]["caveats"])
+    with st.expander("Methodology and limitations"):
+        st.markdown(label["methodology"]["summary"])
+        st.markdown(f'<ul class="kyl-list">{caveats}</ul>', unsafe_allow_html=True)
+        st.markdown(
+            f'<p class="kyl-fine">Method: {esc(label["method"])}. Grades are relative'
+            " to modeled payday peers and are shown per dimension. There is no"
+            " overall grade, because the five dimensions overlap and one number"
+            " would hide that. The CFPB has not classified any lender as safe or"
+            " unsafe, and neither does this model.</p>",
+            unsafe_allow_html=True,
+        )
+
+
+
+
+def _render_household_result(age, education, income, marital, metro, size, children):
+    data = {
+        "agecat": AGE_BANDS.index(age) + 1,
+        "PPEDUC": EDUCATION.index(education) + 1,
+        "PPINCIMP": INCOME.index(income) + 1,
+        "PPMARIT": MARITAL.index(marital) + 1,
+        "PPMSACAT": 1 if metro == "Yes" else 0,
+        "PPHHSIZE": size,
+        "total_children": children,
+        "child_ratio": children / size if size else 0.0,
+    }
+    frame = pd.DataFrame([data])
+    for name, categories in CATEGORICAL_CATEGORIES.items():
+        frame[name] = pd.Categorical(frame[name], categories=categories)
+
+    booster = xgb.Booster()
+    booster.load_model(SNAP_MODEL_PATH)
+    rate = float(booster.predict(xgb.DMatrix(frame, enable_categorical=True))[0])
+
+    pct = rate * 100
+    if pct >= 65:
+        band = "Higher strain"
+        reading = (
+            "Households with these characteristics more often reported receiving"
+            " SNAP benefits in the survey than the modeled peer group."
+        )
+    elif pct >= 35:
+        band = "Typical strain"
+        reading = (
+            "Households with these characteristics reported receiving SNAP benefits"
+            " at roughly the rate of the modeled peer group."
+        )
+    else:
+        band = "Lower strain"
+        reading = (
+            "Households with these characteristics less often reported receiving"
+            " SNAP benefits in the survey than the modeled peer group."
+        )
+
+    section_card(
+        '<p class="kyl-outcome-lab">Survey association</p>'
+        f'<p class="kyl-outcome-val">{pct:.1f}%</p>'
+        f'<p class="kyl-outcome-note"><b>{esc(band)}.</b> {esc(reading)}</p>'
+    )
+
+    section_card(
+        "<h3>What this means</h3>"
+        '<ul class="kyl-list">'
+        "<li>It places a household like this one within a 2016 survey population"
+        " of 6,394 US households.</li>"
+        "<li>SNAP receipt is used as a proxy for financial strain, so a higher"
+        " figure points to more strain, not to a benefit being available.</li>"
+        "</ul>"
+        "<h3>What this does not mean</h3>"
+        '<ul class="kyl-list">'
+        "<li>It is not an eligibility determination, and it cannot tell you"
+        " whether you personally would qualify.</li>"
+        "<li>It is not a forecast. Two households with identical answers can sit"
+        " in very different circumstances.</li>"
+        "<li>It says nothing about any lender and changes no complaint grade.</li>"
+        "</ul>"
+    )
+
+    # Which factors carry the most weight, at the model level. This is a
+    # property of the fitted model, not an attribution for this household, and
+    # the copy says so.
+    try:
+        gains = booster.get_score(importance_type="gain")
+        order = sorted(gains.items(), key=lambda kv: -kv[1])[:3]
+        friendly = {
+            "child_ratio": "children relative to household size",
+            "total_children": "presence of children",
+            "PPHHSIZE": "household size",
+            "PPINCIMP": "household income band",
+            "agecat": "age group",
+            "PPEDUC": "education",
+            "PPMARIT": "marital status",
+            "PPMSACAT": "metro versus non-metro",
+        }
+        top = "".join(
+            f"<li>{esc(friendly.get(k, k))}</li>" for k, _ in order
+        )
+        factors = (
+            "<h3>Factors that matter most in this model</h3>"
+            f'<ul class="kyl-list">{top}</ul>'
+            '<p class="kyl-fine">These are the strongest splits across the whole'
+            " fitted model, not a breakdown of this particular household. A tree"
+            " model has no per-household attribution, so this should not be read"
+            " as a list of reasons for the number above.</p>"
+        )
+        section_card(factors)
+    except Exception:  # pragma: no cover - diagnostics only, never blocks output
+        pass
+
+    st.html(
+        f'<p class="kyl-note">For an actual determination, eligibility is set by'
+        f" your state agency. Official program information: "
+        f'<a href="{esc(SNAP_OFFICIAL)}" target="_blank" rel="noopener noreferrer">'
+        f"USDA Food and Nutrition Service — SNAP</a>.</p>"
+    )
+
+
+
+
+# --------------------------------------------------------------------------
+# Page shell
+# --------------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="Know Your Lender",
+    page_icon=":bar_chart:",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown(stylesheet(), unsafe_allow_html=True)
+
+# The one place a serif is used: the wordmark.
+st.html(
+    '<header style="margin:0 0 1.5rem">'
+    '<p class="kyl-mark">Know Your Lender</p>'
+    '<p class="kyl-tag">Three independent tools for payday-loan questions</p>'
+    '<p class="kyl-lede">Explore CFPB complaint patterns, understand a household’s'
+    " position within survey data, and estimate the cost and timeline of repaying a"
+    " loan.</p>"
+    "</header>"
 )
 
 lender_tab, household_tab, calculator_tab = st.tabs(
-    ["Lender Safety Label", "Household Financial Context", "Loan Payoff Calculator"]
+    [
+        "Lender Complaint Profile",
+        "Household Financial Context",
+        "Loan Payoff Calculator",
+    ]
 )
 
-# ---------------------------------------------------------------- LENDER
+
+# ==========================================================================
+# 1. Lender Complaint Profile
+# ==========================================================================
 with lender_tab:
-    st.header("Payday Loan Safety Label")
-    st.caption(
-        "Each dimension compares this lender\u2019s CFPB complaint pattern with modeled "
-        "payday-loan peers. Hover a grade for the numbers behind it."
+    st.html(
+        '<div style="margin:1.5rem 0 1rem">'
+        "<h2>Lender Complaint Profile</h2>"
+        '<p class="kyl-note">See how a lender’s CFPB payday-loan complaint pattern'
+        " compares with modeled peers. Complaint data reflects reported issues, not"
+        " the total number of customers or an official safety determination.</p>"
+        "</div>"
     )
 
     summary = dataset_summary()
-    all_lenders = lender_index()
-    total = len(all_lenders)
+    st.html(
+        f'<p class="kyl-note" style="margin:0 0 .9rem">'
+        f"{esc(summary['lender_count'])} lenders · "
+        f"{esc(summary['total_complaints'])} complaints in this dataset · "
+        f"method {esc(summary['method'])}</p>"
+    )
 
-    search_col, sort_col = st.columns([3, 1])
-    with search_col:
-        query = st.text_input(
-            f"Search {total} lenders",
-            placeholder="Start typing a lender name\u2026",
-            label_visibility="collapsed",
-        )
-    with sort_col:
-        order = st.selectbox(
-            "Order",
-            ["Most complaints", "Name (A\u2013Z)", "Fewest complaints"],
-            label_visibility="collapsed",
-        )
+    lenders = lender_index()
+    by_name = {row["name"]: row for row in lenders}
 
-    needle = query.strip().lower()
-    if needle:
-        matches = [r for r in all_lenders if needle in r["name"].lower()]
-    else:
-        matches = list(all_lenders)
+    picked_id = st.session_state.get(LENDER_KEY)
 
-    if order == "Name (A\u2013Z)":
-        matches.sort(key=lambda r: r["name"].lower())
-    elif order == "Fewest complaints":
-        matches.sort(key=lambda r: r["n_complaints"])
-    else:
-        matches.sort(key=lambda r: -r["n_complaints"])
+    # A native searchable combobox. filter_mode makes it match as the user
+    # types, so no Enter is needed, and the menu closes on selection because
+    # that is a selectbox's own behaviour. index=None means nothing is
+    # preselected and the 25-most-complained list is never rendered by default.
+    chosen_name = st.selectbox(
+        "Search for a lender",
+        options=list(by_name),
+        index=None,
+        placeholder="Start typing a lender name",
+        filter_mode="contains",
+        key=f"{LENDER_KEY}_combo",
+        format_func=lambda n: f"{n}  ·  {plural(by_name[n]['n_complaints'], 'complaint')}",
+        help="Type any part of a lender's name. Matches as you type.",
+    )
 
-    if not matches:
-        st.info(f"No lender matches \u201c{query.strip()}\u201d. Try a shorter fragment.")
-    else:
-        shown = matches[:MAX_RESULTS]
-        if not needle:
-            st.caption(
-                f"Suggested: the {len(shown)} most-complained of {total}. "
-                "Type to search all of them."
+    if chosen_name is None and picked_id is not None:
+        # "Change lender" was pressed: keep the report card but reopen the picker.
+        chosen_name = None
+
+    if chosen_name is not None:
+        st.session_state[LENDER_KEY] = by_name[chosen_name]["id"]
+        picked_id = by_name[chosen_name]["id"]
+
+    change_col, browse_col = st.columns([1, 1])
+
+    with change_col:
+        if picked_id is not None:
+            if st.button("Change lender", key=f"{LENDER_KEY}_change", width="stretch"):
+                st.session_state[LENDER_KEY] = None
+                st.session_state.pop(f"{LENDER_KEY}_combo", None)
+                st.rerun()
+
+    with browse_col:
+        # Optional browsing, deliberately collapsed so it never pushes the
+        # analysis below the fold. Sorting lives in here rather than beside the
+        # primary search.
+        with st.expander("Browse popular lenders"):
+            browse_sort = st.selectbox(
+                "Order",
+                ["Most complaints", "Name (A–Z)", "Fewest complaints"],
+                key=f"{LENDER_KEY}_sort",
             )
-        elif len(matches) > len(shown):
-            st.caption(f"Showing {len(shown)} of {len(matches):,} matches. Keep typing to narrow.")
-
-        # A list of clickable rows rather than a selectbox. The candidate set
-        # changes on every keystroke and every sort change, and a selectbox
-        # whose stored value falls out of its own options raises and is left
-        # dead -- which is what made the list look like it stopped populating.
-        # Buttons carry stable keys, so the selection survives any reordering,
-        # and the suggestions are visible instead of hidden in a dropdown.
-        picked = st.session_state.get(LENDER_PICK_KEY)
-        if picked is None:
-            picked = shown[0]["id"]
-            st.session_state[LENDER_PICK_KEY] = picked
-
-        with st.container(height=340):
-            for row in shown:
+            pool = list(lenders)
+            if browse_sort == "Name (A–Z)":
+                pool.sort(key=lambda r: r["name"].lower())
+            elif browse_sort == "Fewest complaints":
+                pool.sort(key=lambda r: r["n_complaints"])
+            else:
+                pool.sort(key=lambda r: -r["n_complaints"])
+            pool = pool[:8]
+            for row in pool:
                 if st.button(
-                    f"{row['name']}   ·   {row['n_complaints']:,} complaints",
-                    key=f"{LENDER_PICK_KEY}_{row['id']}",
+                    f"{row['name']}  ·  {plural(row['n_complaints'], 'complaint')}",
+                    key=f"{LENDER_KEY}_pick_{row['id']}",
                     width="stretch",
-                    type="primary" if row["id"] == picked else "secondary",
                 ):
-                    st.session_state[LENDER_PICK_KEY] = row["id"]
-                    picked = row["id"]
+                    st.session_state[LENDER_KEY] = row["id"]
                     st.rerun()
 
-        render_report_card(get_lender(picked))
+    if picked_id is None:
+        section_card(
+            "<h3>No lender selected</h3>"
+            '<p class="kyl-note">Search above for a lender to see its complaint'
+            " profile. Every grade is a comparison against modeled payday peers,"
+            " not a safety verdict.</p>"
+        )
+    else:
+        label = get_lender(picked_id)
+        if label is None:
+            section_card("<h3>Lender not found</h3>")
+        else:
+            _render_lender_report(label)
 
-# ------------------------------------------------------------- HOUSEHOLD
+
+# ==========================================================================
+# 2. Household Financial Context
+# ==========================================================================
 with household_tab:
-    st.header('SNAP Eligibility Predictor')
+    st.html(
+        '<div style="margin:1.5rem 0 1rem">'
+        "<h2>Household Financial Context</h2>"
+        '<p class="kyl-note">This model compares your selections with patterns in'
+        " survey data. It is not an official SNAP eligibility determination.</p>"
+        "</div>"
+    )
 
-    # Load model
-    model = xgb.Booster()
-    model.load_model("snap_xgboost.json")
+    input_col, result_col = st.columns([1, 1], gap="large")
 
-    # Mapping Dictionaries
-    agecat_map = {
-        "18-24": 1, "25-34": 2, "35-44": 3, "45-54": 4,
-        "55-61": 5, "62-69": 6, "70-74": 7, "75+": 8,
-    }
-    ppeduc_map = {
-        "Less than High School": 1, "High School": 2, "Associate's Degree": 3,
-        "Bachelor's Degree": 4, "Graduate or Professional Degree": 5,
-    }
-    ppincimp_map = {
-        "Less than $20,000": 1, "$20,000 to $29,999": 2, "$30,000 to $39,999": 3,
-        "$40,000 to $49,999": 4, "$50,000 to $59,999": 5, "$60,000 to $74,999": 6,
-        "$75,000 to $99,999": 7, "$100,000 to $149,999": 8, "$150,000 or more": 9,
-    }
-    ppmarit_map = {
-        "Married": 1, "Widowed": 2, "Divorced/Separated": 3,
-        "Never married": 4, "Living with partner": 5,
-    }
+    with input_col:
+        with st.form(HOUSEHOLD_FORM_KEY, border=False):
+            st.markdown("**Your household**")
+            age = st.selectbox("Age group", AGE_BANDS, index=1)
+            education = st.selectbox("Highest education", EDUCATION, index=3)
+            income = st.selectbox("Household income", INCOME, index=4)
+            marital = st.selectbox("Marital status", MARITAL, index=0)
+            metro = st.selectbox("Live in a city or metro area", METRO, index=0)
+            size = st.number_input(
+                "People in household", min_value=1, max_value=20, value=3, step=1
+            )
+            children = st.number_input(
+                "Children in the household", min_value=0, max_value=20, value=1, step=1
+            )
 
-    # The complete category set for each categorical feature, in the order xgboost
-    # saw them at training time. Declared explicitly because a bare
-    # astype("category") on a one-row frame derives its categories from that single
-    # row, so a household aged 45-54 would be sent as category code 0 and silently
-    # route the prediction through the wrong branches. Same constant and same
-    # reasoning as backend/app/financial_impact.py.
-    CATEGORICAL_CATEGORIES = {
-        "agecat": [1, 2, 3, 4, 5, 6, 7, 8],
-        "PPEDUC": [1, 2, 3, 4, 5],
-        "PPINCIMP": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-        "PPMARIT": [1, 2, 3, 4, 5],
-        "PPMSACAT": [0, 1],
-    }
+            submitted = st.form_submit_button(
+                "Generate estimate", type="primary", width="stretch"
+            )
 
-    # Layout Columns
-    col1, col2 = st.columns([3, 2], gap="large")
-
-    with col1:
-        st.subheader("Input Details")
-
-        agecat_selected = st.selectbox(
-            "Age Group",
-            ["18-24", "25-34", "35-44", "45-54", "55-61", "62-69", "70-74", "75+"]
-        )
-        ppeduc_selected = st.selectbox(
-            "What is your maximum level of education?",
-            ["Less than High School", "High School", "Associate's Degree", "Bachelor's Degree", "Graduate or Professional Degree"]
-        )
-        ppincimp_selected = st.selectbox(
-            "Household Income",
-            ["Less than $20,000", "$20,000 to $29,999", "$30,000 to $39,999", "$40,000 to $49,999", "$50,000 to $59,999", "$60,000 to $74,999", "$75,000 to $99,999", "$100,000 to $149,999", "$150,000 or more"]
-        )
-        ppmarit_selected = st.selectbox(
-            "Marital Status",
-            ["Married", "Widowed", "Divorced/Separated", "Never married", "Living with partner"]
-        )
-        ppmsacat_selected = st.selectbox("Are you in a city?", ["Yes", "No"])
-
-        c1, c2 = st.columns(2)
-        with c1:
-            pphhsize = st.number_input("Household Size", min_value=1, value=1)
-        with c2:
-            total_children = st.number_input("Total Children", min_value=0, value=0)
-
-        # Convert inputs
-        child_ratio = total_children / pphhsize
-        agecat = agecat_map[agecat_selected]
-        ppeduc = ppeduc_map[ppeduc_selected]
-        ppincimp = ppincimp_map[ppincimp_selected]
-        ppmarit = ppmarit_map[ppmarit_selected]
-        ppmsacat = 1 if ppmsacat_selected == "Yes" else 0
-
-    with col2:
-        st.subheader("Model Prediction")
-
-        # Styled Card Container for Prediction Results
-        with st.container(border=True):
-            st.write("Click below to run inference on the selected features.")
-            predict_btn = st.button("Generate Prediction", type="primary", use_container_width=True)
-
-            st.divider()
-
-            if predict_btn:
-                data = {
-                    "agecat": agecat,
-                    "PPEDUC": ppeduc,
-                    "PPINCIMP": ppincimp,
-                    "PPMARIT": ppmarit,
-                    "PPMSACAT": ppmsacat,
-                    "PPHHSIZE": pphhsize,
-                    "total_children": total_children,
-                    "child_ratio": child_ratio,
-                }
-                df = pd.DataFrame([data])
-                for name, categories in CATEGORICAL_CATEGORIES.items():
-                    df[name] = pd.Categorical(df[name], categories=categories)
-                pred = model.predict(xgb.DMatrix(df, enable_categorical=True))[0]
-
-                # Metric Display
-                st.metric(
-                    label="Predicted Value",
-                    value=f"{pred:,.4f}"
-                )
-
-                st.success("Prediction calculated successfully!")
-
-                # Input summary view
-                with st.expander("View Input Vector"):
-                    st.dataframe(df.T.rename(columns={0: "Value"}), use_container_width=True)
-            else:
-                st.info("Awaiting input submission...")
-
-# ------------------------------------------------------------ CALCULATOR
-with calculator_tab:
-    st.header("Loan Payoff Timeline Calculator")
-    st.write("Enter your loan details below to calculate how long it will take to pay off.")
-
-    st.markdown("---")
-
-    col1, col2 = st.columns([1, 1])
-
-    # Left Column: User Inputs
-    with col1:
-        st.subheader("Loan Details")
-        principal = st.number_input("Loan Amount / Balance ($)", min_value=1.0, value=1000.0, step=50.0)
-        apr = st.number_input("Annual Interest Rate / APR (%)", min_value=0.0, max_value=500.0, value=24.0, step=0.5)
-        monthly_payment = st.number_input("Monthly Payment ($)", min_value=1.0, value=50.0, step=5.0)
-
-    # Right Column: Instant Results Output
-    with col2:
-        st.subheader("Payoff Results")
-
-        # Monthly interest calculation
-        monthly_rate = (apr / 100.0) / 12.0
-        monthly_interest_fee = principal * monthly_rate
-
-        # Check if payment is too low to cover interest
-        if monthly_rate > 0 and monthly_payment <= monthly_interest_fee:
-            st.error("**Debt Trap Warning!**")
-            st.write(
-                f"Your monthly payment of **${monthly_payment:,.2f}** is lower than (or equal to) the "
-                f"accumulating monthly interest of **${monthly_interest_fee:,.2f}**. "
-                "This loan will **never** be paid off at this payment level."
+    with result_col:
+        if not submitted:
+            section_card(
+                "<h3>What you will see</h3>"
+                '<p class="kyl-note">Choose a household on the left and select'
+                " <b>Generate estimate</b>. You will get a short plain-language"
+                " reading of how a household with these characteristics sat in the"
+                " CFPB National Financial Well-Being Survey, what that does and does"
+                " not tell you, and which inputs carry the most weight in the"
+                " model.</p>"
             )
         else:
-            # Payoff calculation
+            _render_household_result(age, education, income, marital, metro, size, children)
+
+
+# ==========================================================================
+# 3. Loan Payoff Calculator
+# ==========================================================================
+with calculator_tab:
+    st.html(
+        '<div style="margin:1.5rem 0 1rem">'
+        "<h2>Loan Payoff Calculator</h2>"
+        '<p class="kyl-note">Work out how long a loan takes to clear and what it'
+        " costs. This is arithmetic on the numbers you enter; it is not a quote,"
+        " an offer, or financial advice.</p>"
+        "</div>"
+    )
+
+    loan_col, payoff_col = st.columns([1, 1], gap="large")
+
+    with loan_col:
+        principal = st.number_input(
+            "Loan amount",
+            min_value=1.0,
+            max_value=10_000_000.0,
+            value=1000.0,
+            step=50.0,
+            key="kyl_principal",
+            format="%.2f",
+        )
+        apr = st.number_input(
+            "Annual interest rate (APR)",
+            min_value=0.0,
+            max_value=500.0,
+            value=24.0,
+            step=0.5,
+            key="kyl_apr",
+            format="%.2f",
+        )
+        payment = st.number_input(
+            "Monthly payment",
+            min_value=0.01,
+            max_value=10_000_000.0,
+            value=50.0,
+            step=5.0,
+            key="kyl_payment",
+            format="%.2f",
+        )
+
+    monthly_rate = (apr / 100.0) / 12.0
+    monthly_interest = principal * monthly_rate
+
+    with loan_col:
+        # Always shown, so the number the payment must beat is never hidden.
+        if monthly_interest > 0:
+            st.html(
+                f'<p class="kyl-note" style="margin:.35rem 0 0">Minimum payment to'
+                f" cover this month’s interest: <b>${monthly_interest:,.2f}</b></p>"
+            )
+        else:
+            st.html(
+                '<p class="kyl-note" style="margin:.35rem 0 0">This loan accrues no'
+                " monthly interest at an APR of 0%.</p>"
+            )
+
+    with payoff_col:
+        if payment <= 0:
+            alert("warning", "Check your payment.", "Enter a monthly payment above zero.")
+        elif monthly_rate > 0 and payment <= monthly_interest:
+            # Previously rendered through st.write, which turned the two dollar
+            # amounts into a LaTeX span and left literal ** markers on screen.
+            alert(
+                "danger",
+                "Debt trap warning:",
+                f"your ${payment:,.2f} monthly payment does not cover the"
+                f" ${monthly_interest:,.2f} in monthly interest. At this payment"
+                " level the balance will grow rather than be paid off.",
+            )
+        else:
             if monthly_rate == 0:
-                months = math.ceil(principal / monthly_payment)
+                months = math.ceil(principal / payment)
             else:
-                n_months = -math.log(1 - (monthly_rate * principal) / monthly_payment) / math.log(1 + monthly_rate)
+                n_months = -math.log(
+                    1 - (monthly_rate * principal) / payment
+                ) / math.log(1 + monthly_rate)
                 months = math.ceil(n_months)
 
-            total_paid = monthly_payment * months
+            total_paid = payment * months
             total_interest = total_paid - principal
             years = round(months / 12.0, 1)
+            interest_share = (total_interest / total_paid * 100) if total_paid > 0 else 0.0
 
-            # Output Display
-            st.metric("Time to Pay Off", f"{months} Months", delta=f"~{years} Years")
+            m1, m2 = st.columns(2)
+            with m1:
+                st.metric("Estimated payoff time", f"{months} months", delta=f"~{years} years")
+                st.metric("Total amount paid", f"${total_paid:,.2f}")
+            with m2:
+                st.metric("Total interest", f"${total_interest:,.2f}")
+                st.metric(
+                    "Interest as share of payments", f"{interest_share:.1f}%"
+                )
 
-            sub_col1, sub_col2 = st.columns(2)
-            with sub_col1:
-                st.metric("Total Interest Paid", f"${total_interest:,.2f}")
-            with sub_col2:
-                st.metric("Total Overall Cost", f"${total_paid:,.2f}")
+            if total_interest > 0:
+                alert(
+                    "info",
+                    "Cost breakdown:",
+                    f"{interest_share:.1f}% of everything you pay goes to interest"
+                    f" rather than reducing the balance. On ${principal:,.2f} at"
+                    f" {apr:.2f}% APR, paying ${payment:,.2f} a month clears the loan"
+                    f" in {months} months.",
+                )
+            else:
+                alert(
+                    "success",
+                    "No interest charged:",
+                    f"at an APR of 0% this loan clears in {months} months with no"
+                    " interest cost.",
+                )
 
-            if total_paid > 0:
-                interest_share = (total_interest / total_paid) * 100
-                st.caption(f"**Cost breakdown:** {interest_share:.1f}% of your payments go directly to interest.")
+# --------------------------------------------------------------------------
+# Footer
+# --------------------------------------------------------------------------
+st.html(
+    '<footer class="kyl-foot">'
+    "<p><b>Know Your Lender</b> draws on two public sources. The lender complaint"
+    " profile is derived from CFPB consumer complaint data; the household estimate"
+    " comes from the CFPB National Financial Well-Being Survey.</p>"
+    "<p>Complaints are consumer-submitted reports and do not necessarily indicate"
+    " verified wrongdoing. Complaint volume indicates how much evidence supports a"
+    " grade, not how many customers a lender has or how much misconduct it commits."
+    " A lender is not penalised for having more complaints.</p>"
+    "<p>Grades are relative comparisons against modeled payday peers, shown per"
+    " dimension, and there is no overall score. The household estimate is a survey"
+    " association from 2016, not an eligibility determination, a forecast, or"
+    " advice. The loan calculator is arithmetic on your inputs.</p>"
+    "</footer>"
+)

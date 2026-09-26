@@ -1,9 +1,22 @@
- [theme]
-baseFontSize = 17
+# Streamlit theme for Know Your Lender.
+#
+# primaryColor was #FFFFFF, which is what made the selected tab and the primary
+# button render white-on-white. Streamlit derives active-tab background, primary
+# button fill and focus rings from this one value, so it has to be a real colour.
+# The font was Spectral (a serif) at baseFontSize 17, and secondaryBackgroundColor
+# was a pale blue that filled every input. All three are corrected here; the
+# design tokens in app.py mirror these values.
+#
+# Tokens: see TOKENS in app.py. Keep the two in step.
 
-primaryColor = "#FFFFFF"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#c1d2ff"
-textColor = "#0a0a0a"
-font = "Spectral:https://fonts.googleapis.com/css2?family=Spectral:wght@400;600;700&display=swap"
+[theme]
+base = "light"
+primaryColor = "#3157D5"
+backgroundColor = "#F7F8FA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#101828"
+font = "sans serif"
 
+# 16px base keeps body copy at the intended 15-16px once Streamlit's own
+# line-height is applied; the previous 17px was oversized against a serif.
+baseFontSize = 16
