@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
+import xgboost as xgb
 import math
 
 st.set_page_config(
@@ -66,3 +67,142 @@ with col2:
         if total_paid > 0:
             interest_share = (total_interest / total_paid) * 100
             st.caption(f"**Cost breakdown:** {interest_share:.1f}% of your payments go directly to interest.")
+
+
+
+
+# Load model
+model = xgb.Booster()
+model.load_model("snap_xgboost.json")
+
+# --- UI INPUTS ---
+
+# Age Category (agecat)
+agecat_selected = st.selectbox(
+    "Age Group",
+    [
+        "18-24",
+        "25-34",
+        "35-44",
+        "45-54",
+        "55-61",
+        "62-69",
+        "70-74",
+        "75+"
+    ]
+)
+
+# Education Level (PPEDUC)
+ppeduc_selected = st.selectbox(
+    "What is your maximum level of education?",
+    [
+        'Less than High School', 
+        'High School', 
+        "Associate's Degree",
+        "Bachelor's Degree", 
+        'Graduate or Professional Degree'
+    ]
+)
+
+# Household Income (PPINCIMP)
+ppincimp_selected = st.selectbox(
+    "Household Income",
+    [
+        "Less than $20,000",
+        "$20,000 to $29,999",
+        "$30,000 to $39,999",
+        "$40,000 to $49,999",
+        "$50,000 to $59,999",
+        "$60,000 to $74,999",
+        "$75,000 to $99,999",
+        "$100,000 to $149,999",
+        "$150,000 or more"
+    ]
+)
+
+# Marital Status (PPMARIT)
+ppmarit_selected = st.selectbox(
+    "Marital Status",
+    [
+        "Married",
+        "Widowed",
+        "Divorced/Separated",
+        "Never married",
+        "Living with partner"
+    ]
+)
+
+# City / Metro Status (PPMSACAT)
+ppmsacat_selected = st.selectbox("Are you in a city?", ['Yes', 'No'])
+
+# Household Size & Children
+pphhsize = st.number_input("How many people are in your household?", min_value=1, value=1)
+total_children = st.number_input("Total Children", min_value=0, value=0)
+child_ratio = total_children / pphhsize
+pctlt200fpl = st.number_input("PCTLT200FPL", min_value=0.0, value=0.0)
+
+# --- MAPPINGS ---
+
+agecat_map = {
+    "18-24": 1,
+    "25-34": 2,
+    "35-44": 3,
+    "45-54": 4,
+    "55-61": 5,
+    "62-69": 6,
+    "70-74": 7,
+    "75+": 8
+}
+
+ppeduc_map = {
+    'Less than High School': 1,
+    'High School': 2,
+    "Associate's Degree": 3,
+    "Bachelor's Degree": 4,
+    'Graduate or Professional Degree': 5
+}
+
+ppincimp_map = {
+    "Less than $20,000": 1,
+    "$20,000 to $29,999": 2,
+    "$30,000 to $39,999": 3,
+    "$40,000 to $49,999": 4,
+    "$50,000 to $59,999": 5,
+    "$60,000 to $74,999": 6,
+    "$75,000 to $99,999": 7,
+    "$100,000 to $149,999": 8,
+    "$150,000 or more": 9
+}
+
+ppmarit_map = {
+    "Married": 1,
+    "Widowed": 2,
+    "Divorced/Separated": 3,
+    "Never married": 4,
+    "Living with partner": 5
+}
+
+# Variable Assignment
+agecat = agecat_map[agecat_selected]
+ppeduc = ppeduc_map[ppeduc_selected]
+ppincimp = ppincimp_map[ppincimp_selected]
+ppmarit = ppmarit_map[ppmarit_selected]
+ppmsacat = 1 if ppmsacat_selected == 'Yes' else 0
+
+# --- PREDICTION ---
+
+if st.button("Predict"):
+    data = {
+        "agecat": agecat,
+        "PPEDUC": ppeduc,
+        "PPINCIMP": ppincimp,
+        "PPMARIT": ppmarit,
+        "PPMSACAT": ppmsacat,
+        "PPHHSIZE": pphhsize,
+        "total_children": total_children,
+        "child_ratio": child_ratio,
+        "PCTLT200FPL": pctlt200fpl,
+    }
+    df = pd.DataFrame([data])
+    pred = model.predict(xgb.DMatrix(df))
+    st.write("Prediction:", pred[0])
