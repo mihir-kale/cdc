@@ -58,11 +58,96 @@ export type DatasetSummary = {
   dimensions: Record<string, Omit<DimensionScore, "score" | "complaints" | "prevalence" | "prevalence_lo90" | "prevalence_hi90" | "comparison">>;
 };
 
+/*
+ * Household Financial Context.
+ *
+ * A different question from the Safety Label: not "is this lender risky" but
+ * "where does a household like mine sit in survey terms". Nothing here is
+ * derived from a lender, and no value here feeds back into a safety label.
+ */
+
+export type InputOption = {
+  code: number;
+  label: string;
+  /** Present only on checkbox groups; names the boolean field to set. */
+  field?: string | null;
+};
+
+export type InputField = {
+  survey_variable: string;
+  label: string;
+  control: "select" | "checkbox";
+  options: InputOption[];
+};
+
+export type HouseholdInputOptions = {
+  inputs: Record<string, InputField>;
+  what_this_is: string;
+  what_this_is_not: string[];
+};
+
+export type HouseholdProfile = {
+  age_band: number;
+  education: number;
+  household_income: number;
+  marital_status: number;
+  household_size: number;
+  metro_area: number;
+  county_poverty_share: number;
+  children_0_1: boolean;
+  children_2_5: boolean;
+  children_6_12: boolean;
+  children_13_17: boolean;
+};
+
+export type HouseholdContextMethodology = {
+  survey: string;
+  survey_year: number;
+  households_modelled: number;
+  weighted_roc_auc: number;
+  target: string;
+  source_script: string;
+  relationship_to_safety_label: string;
+};
+
+export type HouseholdContext = {
+  context_band: "higher_strain" | "typical_strain" | "lower_strain";
+  band_label: string;
+  summary: string;
+  /** Relative position among surveyed households; the consumer-facing result. */
+  survey_percentile: number;
+  /**
+   * The raw model probability. Kept for traceability and shown only as a
+   * secondary technical detail: a 2016 survey association is easy to misread as
+   * a personal forecast, which is why the percentile leads instead.
+   */
+  model_association_rate: number;
+  what_this_is: string;
+  what_this_is_not: string[];
+  methodology: HouseholdContextMethodology;
+  caveats: string[];
+};
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, { cache: "no-store" });
 
   if (!response.ok) {
     throw new Error(`GET ${path} failed with status ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`POST ${path} failed with status ${response.status}`);
   }
 
   return response.json();
@@ -78,4 +163,14 @@ export function fetchLender(lenderId: string): Promise<SafetyLabel> {
 
 export function fetchDataset(): Promise<DatasetSummary> {
   return getJson<DatasetSummary>("/dataset");
+}
+
+export function fetchHouseholdInputOptions(): Promise<HouseholdInputOptions> {
+  return getJson<HouseholdInputOptions>("/financial-impact/inputs");
+}
+
+export function fetchHouseholdContext(
+  profile: HouseholdProfile,
+): Promise<HouseholdContext> {
+  return postJson<HouseholdContext>("/financial-impact/context", profile);
 }

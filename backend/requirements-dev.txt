@@ -1,8 +1,17 @@
 -r requirements.txt
 
-pandas>=2.2
-numpy>=1.26
+# Offline work only: retraining the household financial context model, and
+# regenerating the lender safety label. None of this is imported by the running
+# service, which loads pre-built artifacts.
+#
+#   python -m app.train_financial_impact   -> app/generated/financial_impact_*
+#   python -m app.safety_labels            -> app/generated/lender_safety_labels.json
+#
+# Note that app/financial_impact.py deliberately does NOT import scikit-learn.
+# Training goes through model.get_booster().save_model() and inference through
+# xgboost.Booster, which sidesteps the sklearn 1.6/1.9 tag-system breakage that
+# makes XGBClassifier.save_model/load_model fail in both directions.
 scikit-learn>=1.5
+scipy>=1.11
 matplotlib>=3.9
 jupyter>=1.1
-scipy>=1.11

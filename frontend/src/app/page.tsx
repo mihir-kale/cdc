@@ -1,4 +1,5 @@
 import LenderSearch from "@/components/LenderSearch";
+import FinancialContext from "@/components/FinancialContext";
 
 export default function Home() {
   return (
@@ -10,7 +11,27 @@ export default function Home() {
         </p>
       </header>
 
-      <LenderSearch />
+      <section aria-labelledby="lender-safety-heading" className="flex flex-col gap-4">
+        <div>
+          <h2
+            id="lender-safety-heading"
+            className="text-sm font-medium tracking-wide text-gray-500 uppercase"
+          >
+            About the lender
+          </h2>
+          <p className="mt-1 text-sm text-gray-600">
+            How does this lender&rsquo;s CFPB complaint profile compare with modeled
+            payday-loan peers?
+          </p>
+        </div>
+        <LenderSearch />
+      </section>
+
+      <hr className="border-gray-200" />
+
+      <section aria-labelledby="household-context-heading">
+        <FinancialContext />
+      </section>
 
       <footer className="mt-auto border-t border-gray-200 pt-6 text-xs leading-relaxed text-gray-500">
         <p>
@@ -25,6 +46,12 @@ export default function Home() {
           strength; a lender is not penalized simply for having more complaints because
           FinePrint does not currently have lender-level customer or loan-volume
           denominators.
+        </p>
+        <p className="mt-2">
+          The Household Financial Context section is a separate, independent analysis
+          drawn from the CFPB National Financial Well-Being Survey. It describes a
+          household, never a lender, and there is no overall FinePrint score combining
+          the two.
         </p>
       </footer>
     </main>

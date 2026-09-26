@@ -1,3 +1,15 @@
 fastapi>=0.115
 uvicorn[standard]>=0.32
 pydantic>=2.9
+
+# Household Financial Context model (app/financial_impact.py).
+#
+# numpy<2 is not a preference. xgboost 2.0.3's categorical encoder still calls
+# np.NaN, which NumPy removed in 2.0, so the model cannot be loaded or run on
+# numpy 2.x. xgboost is pinned to 2.0.3 because that is the newest release whose
+# Booster round-trips bit-identically across the environments this model is
+# trained in and served from; 3.x changes the fit enough to move the holdout
+# ROC-AUC in the fourth decimal.
+numpy>=1.26,<2
+pandas>=2.2,<3
+xgboost==2.0.3
