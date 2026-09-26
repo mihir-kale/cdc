@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import streamlit as st
 import xgboost as xgb
 import math
@@ -69,7 +68,7 @@ with col2:
             st.caption(f"**Cost breakdown:** {interest_share:.1f}% of your payments go directly to interest.")
 
 
-st.header('SNAP Elgibility Predictor')
+st.header('SNAP Eligibility Predictor')
 
 # Load model
 model = xgb.Booster()
@@ -92,6 +91,20 @@ ppincimp_map = {
 ppmarit_map = {
     "Married": 1, "Widowed": 2, "Divorced/Separated": 3,
     "Never married": 4, "Living with partner": 5,
+}
+
+# The complete category set for each categorical feature, in the order xgboost
+# saw them at training time. Declared explicitly because a bare
+# astype("category") on a one-row frame derives its categories from that single
+# row, so a household aged 45-54 would be sent as category code 0 and silently
+# route the prediction through the wrong branches. Same constant and same
+# reasoning as backend/app/financial_impact.py.
+CATEGORICAL_CATEGORIES = {
+    "agecat": [1, 2, 3, 4, 5, 6, 7, 8],
+    "PPEDUC": [1, 2, 3, 4, 5],
+    "PPINCIMP": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "PPMARIT": [1, 2, 3, 4, 5],
+    "PPMSACAT": [0, 1],
 }
 
 # Layout Columns
@@ -154,7 +167,9 @@ with col2:
                 "child_ratio": child_ratio,
             }
             df = pd.DataFrame([data])
-            pred = model.predict(xgb.DMatrix(df))[0]
+            for name, categories in CATEGORICAL_CATEGORIES.items():
+                df[name] = pd.Categorical(df[name], categories=categories)
+            pred = model.predict(xgb.DMatrix(df, enable_categorical=True))[0]
 
             # Metric Display
             st.metric(

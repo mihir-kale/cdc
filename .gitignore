@@ -23,5 +23,13 @@ data/processed/*
 !data/raw/README.md
 !data/processed/.gitkeep
 
+# Model artifacts retrained by the Streamlit prototype. The root
+# snap_xgboost.json is already tracked, so this only affects newly built copies
+# and stops them showing up as untracked noise. The served artifact is
+# backend/app/generated/financial_impact_model.json and stays tracked; see
+# "Two SNAP models" in README.md before changing anything here.
+snap_xgboost.json
+*.ubj
+
 # OS
 .DS_Store

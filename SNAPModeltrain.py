@@ -87,6 +87,10 @@ print(
 val_preds = (val_probs >= 0.35).astype(int)
 print("\nClassification Report:\n", classification_report(y_val, val_preds))
 
-model.save_model("snap_xgboost.json")
+# Export the native Booster, not the sklearn wrapper. XGBClassifier.save_model
+# writes the sklearn estimator format, which raises
+# "TypeError: `_estimator_type` undefined" under xgboost 2.0.3, and app.py reads
+# this file back with xgb.Booster().load_model() anyway.
+model.get_booster().save_model("snap_xgboost.json")
 print("\nModel saved successfully as snap_xgboost.json!")
 

@@ -68,8 +68,9 @@ without running any data pipeline or training:
 ├── tests/               unittest suite
 ├── wellbeing.csv        CFPB NFWBS public-use file (training input)
 ├── render.yaml          Render blueprint for the backend
-├── SNAPModeltrain.py    Teammate's original model script (training only)
+├── SNAPModeltrain.py    Teammate's model script (training only, 8-feature)
 ├── app.py               Streamlit prototype stub (not the product)
+├── snap_xgboost.json    Artifact for app.py; not the served model
 └── README.md
 ```
 
@@ -259,17 +260,47 @@ survey terms".
 
 ### What the model is
 
-Amishi's `SNAPModeltrain.py`, integrated **unchanged**. It is a gradient-boosted
-classifier over nine household variables from the CFPB National Financial
-Well-Being Survey (`wellbeing.csv`, 6,394 households) that estimates the survey
-item *"Any household member received SNAP benefits."* Weighted holdout ROC-AUC
-**0.8805**.
+Amishi's `SNAPModeltrain.py`, from which this model is derived. It is a
+gradient-boosted classifier over nine household variables from the CFPB National
+Financial Well-Being Survey (`wellbeing.csv`, 6,394 households) that estimates
+the survey item *"Any household member received SNAP benefits."* Weighted holdout
+ROC-AUC **0.8805**.
 
 Features: age band, education, household income, marital status, household size,
 metro/non-metro, county poverty share, and presence of children in four age
 bands. Input labels are transcribed from the official NFWBS public-use file
 codebook and live in `backend/app/financial_impact.py`, which is the single
 source of truth for both the API and the UI.
+
+`SNAPModeltrain.py` is no longer identical to what is served; the nine-feature
+description above applies to the served model only. See
+[Two SNAP models](#two-snap-models).
+
+### Two SNAP models
+
+There are two SNAP classifiers in the repo. They are not interchangeable, and
+their scores must not be quoted for one another.
+
+|                     | Served                                  | Streamlit prototype        |
+| ------------------- | --------------------------------------- | -------------------------- |
+| Code                | `backend/app/train_financial_impact.py` | `SNAPModeltrain.py`        |
+| Features            | 9, including `PCTLT200FPL`              | 8, `PCTLT200FPL` dropped   |
+| Weighted holdout AUC| 0.8804976376                            | 0.8794848776               |
+| Artifact            | `backend/app/generated/`                | `snap_xgboost.json`        |
+| Covered by CI       | yes                                     | no                         |
+
+The prototype dropped county poverty share in `bb582f8`. On the script's own
+80/20 stratified split that costs 0.001 weighted ROC-AUC, so the smaller feature
+set is defensible on accuracy. It is still a different model from the one the API
+serves, and the UI does not consume it.
+
+The checked-in `snap_xgboost.json` additionally does not reproduce from the
+checked-in script: on that same split the committed artifact scores **0.8755**
+where `SNAPModeltrain.py` as committed scores **0.8795**. That gap is orders of
+magnitude larger than the architecture noise described under
+[Training and inference](#training-and-inference) (~9e-08), so the artifact came
+from some earlier configuration. Regenerate it with `python SNAPModeltrain.py`
+before trusting its numbers.
 
 ### What it is not
 
@@ -302,7 +333,11 @@ python -m app.train_financial_impact   # needs wellbeing.csv, ~5s
 
 Retraining reproduces the committed model, and a test asserts it. The original
 script retrained on every run and then discarded the model, since its
-`save_model` call was commented out.
+`save_model` call was commented out. `bb582f8` re-enabled that export in
+`SNAPModeltrain.py`, which is why the repo now holds a second artifact; it
+writes the root `snap_xgboost.json` via `model.get_booster().save_model()`, the
+same export path described below, and never touches
+`backend/app/generated/`.
 
 The interesting part is *how* it asserts that. A byte-identical retrain is only
 meaningful within one CPU architecture. XGBoost's histogram builder accumulates
@@ -347,18 +382,27 @@ full codebook category set, and locked by a batch-parity test over the survey.
 
 ## Streamlit: status
 
-`app.py` is a **Streamlit prototype, not the product.** As of `f4c7ca5` it holds
-a loan payoff timeline calculator (amortisation schedule and payoff date) under
-the "PayWatch" title. It is useful for exploring that calculation interactively,
-but it is not deployed, not wired into the FastAPI service, and the Next.js app
-does not use it. The survey model itself is not in `app.py` at all:
-`SNAPModeltrain.py` is the substantive work there, and it is now integrated
-behind FastAPI as described above.
+`app.py` is a **Streamlit prototype, not the product.** It holds a loan payoff
+timeline calculator (amortisation schedule and payoff date) under the "PayWatch"
+title, and since `bb582f8` a SNAP predictor that loads `snap_xgboost.json` and
+scores a household profile. It is useful for exploring those interactively, but
+it is not deployed, not wired into the FastAPI service, and the Next.js app does
+not use it. The survey model it scores with is the eight-feature prototype
+described under [Two SNAP models](#two-snap-models), **not** the nine-feature
+model the API serves.
 
 Note the deliberate asymmetry: the payoff calculator in `app.py` is a real
 arithmetic tool, whereas the Household Financial Context model is a *survey
 association* and deliberately carries no loan terms. Do not read the existence
-of one as implying the other.
+of one as implying the other. For the same reason, the prototype's "Predicted
+Value" metric is a raw association rate and inherits none of the framing
+discussed above; treat it as a debugging surface, not a user-facing result.
+
+`app.py` is outside CI, which covers only `backend/` and `frontend/`. Nothing
+there exercises the Streamlit inference path, so the categorical-casting
+contract described under
+[Why inference does not use scikit-learn](#why-inference-does-not-use-scikit-learn)
+has to be kept in sync by hand.
 
 **Nothing about the Streamlit code dictates the production architecture.**
 `app.py` and `.streamlit/config.toml` are retained as a development and modelling
