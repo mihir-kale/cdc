@@ -31,6 +31,7 @@ Presentation notes that matter when editing this file:
 from __future__ import annotations
 
 import html
+import importlib.util
 import math
 import sys
 from pathlib import Path
@@ -39,10 +40,32 @@ import pandas as pd
 import streamlit as st
 import xgboost as xgb
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
+_BACKEND = Path(__file__).resolve().parent / "backend"
 
-from app.label_store import dataset_summary, get_lender, lender_index  # noqa: E402
+# The lender Safety Label is reused from the FastAPI service rather than
+# reimplemented, so both surfaces render identical numbers off one committed
+# artifact. label_store is standard-library only and imports nothing from its own
+# package, so it is loaded straight from its file.
+#
+# It is deliberately NOT imported as `app.label_store`. This script is itself
+# called app.py, and Streamlit's runtime registers the entrypoint in sys.modules
+# under its own stem, so the name `app` is already taken by the script and is not
+# a package. `from app.label_store import ...` therefore dies with
+# "No module named 'app.label_store'; 'app' is not a package" -- and it dies only
+# on the deployed runtime, because locally the backend package happens to win the
+# name. Loading by path sidesteps the collision entirely.
+_spec = importlib.util.spec_from_file_location(
+    "kyl_label_store", _BACKEND / "app" / "label_store.py"
+)
+if _spec is None or _spec.loader is None:  # pragma: no cover
+    raise ImportError(f"cannot load label_store from {_BACKEND}")
+_label_store = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_label_store)
+
+dataset_summary = _label_store.dataset_summary
+get_lender = _label_store.get_lender
+lender_index = _label_store.lender_index
+
 from kyl_theme import GRADE_STYLE, TOKENS, stylesheet  # noqa: E402
 
 # --------------------------------------------------------------------------

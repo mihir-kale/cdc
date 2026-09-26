@@ -13,17 +13,30 @@
 # NumPy removed in 2.0. xgboost is pinned for the same reason as the backend --
 # it is the version the committed model artifact was built and verified against.
 #
-# DEPLOY ON PYTHON 3.12. This is not a preference, and Community Cloud cannot
-# change it after the fact -- switching means deleting the app and redeploying.
+# DEPLOY ON PYTHON 3.12, and treat any other version as a bug rather than a
+# preference. Streamlit Community Cloud cannot change the Python version after
+# deployment, so correcting it means deleting the app and redeploying with 3.12
+# chosen in Advanced settings.
 #
-# No numpy release below 2.0 ships a cp313 wheel (1.26.4, the last of them, tops
-# out at cp312), so on 3.13 pip finds no candidate and silently falls back to
-# building numpy from source. That takes tens of minutes and then usually fails,
-# which looks like a hung deploy rather than a version problem. The environment
-# marker below makes it fail in seconds and name numpy, instead of hanging.
+# What happens elsewhere, measured on a real 3.14 deploy:
+#
+#   Python 3.14 has no numpy 1.x wheel, so pip/uv builds numpy from source.
+#   That takes about three minutes and it does succeed, so the deploy looks
+#   like it is hanging rather than like a version problem. numpy 1.26 predates
+#   3.14 by two releases, so a source build of it is also outside numpy's own
+#   support window.
+#
+# Do NOT try to fix this by pinning numpy with an environment marker such as
+# `; python_version < "3.13"`. That was tried and it is worse than useless:
+# excluding the direct numpy pin does not exclude the transitive requirement,
+# so pandas, streamlit and scipy simply resolve numpy 2 instead, and
+# xgboost 2.0.3 then fails at load time because its categorical encoder calls
+# the np.NaN that numpy 2 removed. The pin has to be unconditional so that
+# resolution fails loudly here rather than silently installing a numpy that
+# cannot work.
 #
 # Moving to 3.13+ properly means numpy 2.x, which means dropping xgboost 2.0.3
-# for a release that supports numpy 2, which breaks the byte-reproducibility the
+# for a numpy-2-compatible release, which breaks the byte-reproducibility the
 # committed artifacts and tests/test_financial_impact.py depend on. render.yaml
 # pins PYTHON_VERSION 3.12.4 for exactly this reason.
 
@@ -33,5 +46,5 @@
 # this deliberately, alongside a local run of `streamlit run app.py`.
 streamlit==1.64.0
 pandas>=2.2,<3
-numpy>=1.26,<2; python_version < "3.13"
+numpy>=1.26,<2
 xgboost==2.0.3
