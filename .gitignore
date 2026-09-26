@@ -5,3 +5,8 @@ venv/
 .env
 .DS_Store
 node_modules/
+
+# Pipeline inputs and outputs: multi-GB source CSV, DuckDB cache, generated data
+data/
+*.duckdb
+*.duckdb.wal
