@@ -52,7 +52,7 @@ def get_lender(lender_id: str) -> dict[str, Any] | None:
     artifact = load_artifact()
     for lender in artifact["lenders"]:
         if lender["id"] == lender_id:
-            return {
+            record = {
                 **lender,
                 "method": artifact["method"],
                 "methodology": artifact["methodology"],
@@ -61,16 +61,26 @@ def get_lender(lender_id: str) -> dict[str, Any] | None:
                     for slug, values in lender["dimensions"].items()
                 },
             }
+            # The observed issue taxonomy travels with the label, so a consumer
+            # surface can name the underlying CFPB issues without rebuilding the
+            # mapping and without the raw complaint dataset leaving the backend.
+            if "issues" in artifact:
+                record["issues"] = artifact["issues"]
+                record["complaint_share_note"] = artifact.get("complaint_share_note")
+            return record
     return None
 
 
 def dataset_summary() -> dict[str, Any]:
     """Counts and methodology shown alongside the label."""
     artifact = load_artifact()
-    return {
+    summary = {
         "lender_count": artifact["lender_count"],
         "total_complaints": artifact["total_complaints"],
         "method": artifact["method"],
         "methodology": artifact["methodology"],
         "dimensions": artifact["dimensions"],
     }
+    if "issues" in artifact:
+        summary["issue_taxonomy_size"] = len(artifact["issues"])
+    return summary

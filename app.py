@@ -323,6 +323,7 @@ def _render_verdict_strip(label: dict) -> None:
         )
 
     st.html(
+        '<h3 class="kyl-section-h">Compared with typical peers</h3>'
         f'<p class="kyl-strip-head">{headline}</p>'
         f'<div class="kyl-strip" role="img" aria-label="{esc(plain)}">'
         f'{"".join(cells)}</div>'
@@ -333,52 +334,43 @@ def _render_verdict_strip(label: dict) -> None:
 
 
 def _render_comparison_table(lenders: list[dict], needle: str) -> None:
-    """Every lender, sortable, click to select. The cross-lender view.
+    """Every lender, sortable, click to select. This list exists to FIND a lender.
 
-    A native st.dataframe so sorting, keyboard navigation and screen-reader
-    semantics come from the component rather than from anything hand-built.
-
-    The columns are deliberately evidentiary. Complaints is a count, not a rate:
-    without customer or loan-volume denominators a large lender will always look
-    worse, so this is never a quality measure and the caption says so.
+    It is deliberately not a ranking. The default order is alphabetical, and the
+    column that could be mistaken for a quality score has been replaced with the
+    lender's largest observed complaint category: how separable a lender is says
+    how much complaint data it has, not whether it is better or worse.
     """
     rows = []
     for row in lenders:
         full = get_lender(row["id"])
         if full is None:  # pragma: no cover
             continue
-        summary = _separable_summary(full)
         rows.append(
             {
                 "id": row["id"],
                 "Lender": row["name"],
-                "Complaints": row["n_complaints"],
-                "Evidence": row["evidence"],
-                "Distinguishable": f"{summary['separable']} of 5",
-                "Direction": {
-                    "more": "More complaints than peers",
-                    "fewer": "Fewer complaints than peers",
-                    "mixed": "Mixed",
-                    "not separable": "—",
-                }[summary["direction"]],
-                "_sort_dist": summary["separable"],
+                "Complaints in dataset": row["n_complaints"],
+                "Evidence available": row["evidence"],
+                "Largest reported category": _largest_category(full),
             }
         )
 
     frame = pd.DataFrame(rows)
     if needle:
         frame = frame[frame["Lender"].str.contains(needle, case=False, na=False)]
-    frame = frame.sort_values("Complaints", ascending=False).reset_index(drop=True)
+    # Alphabetical by default. The list is a lookup, not a leaderboard.
+    frame = frame.sort_values("Lender").reset_index(drop=True)
 
+    matched = f' matching "{esc(needle)}"' if needle else ""
     st.html(
-        f'<p class="kyl-note" style="margin:.6rem 0 .3rem">'
-        f"{len(frame):,} of {len(lenders):,} lenders"
-        + (f' matching “{esc(needle)}”' if needle else "")
-        + ". Sort any column; select a row to load its profile.</p>"
+        '<p class="kyl-note" style="margin:.6rem 0 .3rem">'
+        f"{len(frame):,} of {len(lenders):,} lenders{matched}. "
+        "Sorted by name. Select a row to open its complaint profile.</p>"
     )
 
     st.dataframe(
-        frame.drop(columns=["_sort_dist"]),
+        frame.drop(columns=["id"]),
         hide_index=True,
         width="stretch",
         height=420,
@@ -386,195 +378,304 @@ def _render_comparison_table(lenders: list[dict], needle: str) -> None:
         selection_mode="single-row",
         column_config={
             "Lender": st.column_config.TextColumn("Lender", width="stretch"),
-            "Complaints": st.column_config.NumberColumn("Complaints", format="%d"),
-            "Evidence": st.column_config.TextColumn("Evidence"),
-            "Distinguishable": st.column_config.TextColumn("Distinguishable"),
-            "Direction": st.column_config.TextColumn("Direction"),
+            "Complaints in dataset": st.column_config.NumberColumn(
+                "Complaints in dataset", format="%d"
+            ),
+            "Evidence available": st.column_config.TextColumn("Evidence available"),
+            "Largest reported category": st.column_config.TextColumn(
+                "Largest reported category"
+            ),
         },
     )
     st.html(
-        '<p class="kyl-fine">Complaints is a count of consumer-submitted reports,'
-        " not a rate per customer, so it is not a quality measure: a larger lender"
-        " will usually have more. “Distinguishable” is the number of complaint"
-        " types the model can separate from peers with enough evidence to say"
-        " something, and most lenders have none.</p>"
+        '<p class="kyl-fine">Sorted by name, not by any measure of quality.'
+        " Complaints in dataset is a count of consumer-submitted reports, not a"
+        " rate per customer, so it is not a quality measure and a larger lender"
+        " will usually have more. Evidence available describes how much complaint"
+        " data exists for a lender and nothing more. This list is for finding a"
+        " lender, not for ranking one.</p>"
     )
     return frame
 
 
-def _render_composition(label: dict) -> None:
-    """Share of this lender's payday complaints by type, as a stacked bar.
+def _largest_category(label: dict) -> str:
+    """Name of the biggest observed complaint category, for the lender list."""
+    scored = [
+        row
+        for row in _complaint_rows(label)
+        if row["slug"] != "other" and row["complaints"] > 0
+    ]
+    if not scored:
+        return "—"
+    return scored[0]["label"]
 
-    Deliberately not a pie chart. A pie's slices must sum to the whole, and here
-    they frequently do not: across the dataset the five types cover a mean of
-    only 78% of a lender's complaints, 72 lenders have more than half their
-    complaints outside these five types, and 61 have all of them outside. Drawing
-    five slices that sum to 100% would claim these types are the entire
-    composition when they are not. The uncovered remainder is therefore drawn as
-    its own neutral segment, which turns the coverage gap into information rather
-    than hiding it.
 
-    A stacked bar rather than a pie for a second reason: the median lender has
-    four of the five categories at zero, so a pie would usually be one or two
-    slices. Bars degrade honestly when most of the data is absent.
+PEER_WORDING = {
+    "more": "More prominent than among typical payday-loan peers.",
+    "fewer": "Less prominent than among typical payday-loan peers.",
+    "similar": (
+        "Available complaint data does not clearly distinguish this pattern from"
+        " typical payday-loan peers."
+    ),
+}
 
-    Colour identifies the type and nothing else; every segment is also labelled
-    with its count and share, so the chart never depends on colour alone.
+# How a dimension is named in the "what to pay attention to" summary. Keyed by
+# the same slugs as the artifact so the two cannot drift.
+WATCH_PHRASE = {
+    "fees": "fee disclosures and automatic-withdrawal terms",
+    "withdrawal": "authorisation for automatic withdrawals, and the dates and amounts taken",
+    "servicing": "payment-crediting procedures, contact channels and payoff handling",
+    "unauthorized": "your application and authorisation records, and account activity",
+    "credit_rep": "what is reported to credit bureaus and how to dispute it",
+}
+
+
+def _complaint_rows(label: dict) -> list[dict]:
+    """The five scored types plus Other, ordered for reading.
+
+    The five are ordered by observed share so the most-reported problem is first,
+    which is the question the page exists to answer. Other always sits last
+    because it is a residual rather than a finding.
     """
-    dims = label["dimensions"]
+    rows = []
+    for slug, dim in label["dimensions"].items():
+        rows.append(
+            {
+                "slug": slug,
+                "label": dim["label"],
+                "complaints": int(dim["complaints"]),
+                "share": float(dim.get("share", 0.0)),
+                "issues": dim.get("issues", []),
+                "consumers_reported": dim.get("consumers_reported", ""),
+                "what_to_inspect": dim.get("what_to_inspect", ""),
+                "summary": dim.get("summary", ""),
+                "comparison": dim["comparison"],
+                "score": dim["score"],
+                "prevalence": dim["prevalence"],
+                "lo90": dim["prevalence_lo90"],
+                "hi90": dim["prevalence_hi90"],
+            }
+        )
+    rows.sort(key=lambda r: (-r["share"], -r["complaints"], r["label"]))
+
+    other = label.get("other")
+    if other:
+        rows.append(
+            {
+                "slug": "other",
+                "label": other["label"],
+                "complaints": int(other["complaints"]),
+                "share": float(other.get("share", 0.0)),
+                "issues": other.get("issues", []),
+                "consumers_reported": other.get("summary", ""),
+                "what_to_inspect": "",
+                "summary": other.get("summary", ""),
+                "comparison": None,
+                "score": None,
+                "prevalence": None,
+                "lo90": None,
+                "hi90": None,
+            }
+        )
+    return rows
+
+
+def _watch_for_summary(label: dict, rows: list[dict]) -> str:
+    """Deterministic "what should I pay attention to?" copy.
+
+    Built from the largest observed categories only, and phrased as things to
+    inspect rather than things the lender does. No model, no generation: the text
+    is assembled from the artifact's own guidance, so it cannot assert anything
+    the complaint counts do not support.
+    """
+    scored = [r for r in rows if r["slug"] != "other" and r["complaints"] > 0]
+    if not scored:
+        return (
+            "There are no complaints in this dataset for this lender, so there is"
+            " no pattern here to inspect."
+        )
+
+    top = scored[:2]
+    names = [r["label"].split(" &")[0].split(" /")[0].lower() for r in top]
+    if len(names) == 1:
+        subject = names[0]
+        verb = "makes up the largest share"
+    else:
+        subject = " and ".join(names)
+        verb = "make up the largest share"
+
+    # Each guidance string already opens with "Check", and the sentence supplies
+    # its own verb, so strip that and lowercase only the first letter. Lowercasing
+    # the whole string would turn APR into apr.
+    def _clause(text: str) -> str:
+        text = text.strip().rstrip(".")
+        if text[:5].lower() == "check":
+            text = text[5:].strip()
+        return text[:1].lower() + text[1:] if text else text
+
+    guidance = "; ".join(
+        _clause(r["what_to_inspect"]) for r in top if r["what_to_inspect"]
+    )
     total = int(label["n_complaints"])
-    if total <= 0:
-        return
 
-    counts = {slug: int(value["complaints"]) for slug, value in dims.items()}
-    covered = sum(counts.values())
-    uncovered = total - covered
-
-    segments = []
-    for slug, value in dims.items():
-        if counts[slug] > 0:
-            segments.append((slug, counts[slug], 100 * counts[slug] / total))
-    if uncovered > 0:
-        segments.append(("other", uncovered, 100 * uncovered / total))
-    # Largest first so the leading edge of the bar is stable between lenders.
-    segments.sort(key=lambda seg: -seg[2])
-
-    bar = "".join(
-        f'<span class="kyl-seg" style="width:{share:.3f}%;'
-        f'background:{CATEGORY_STYLE[slug]}" '
-        f'title="{esc(_complaint_type_name(slug, dims))}: '
-        f'{count:,} of {total:,} ({share:.1f}%)"></span>'
-        for slug, count, share in segments
-    )
-
-    # The legend lists all five types even at zero. A category with no
-    # complaints is a finding about the lender, not an absence of one, and
-    # dropping it would quietly imply the other types account for everything.
-    legend_rows = [
-        (slug, counts[slug], 100 * counts[slug] / total) for slug in dims
-    ] + ([("other", uncovered, 100 * uncovered / total)] if uncovered else [])
-    legend_rows.sort(key=lambda row: -row[2])
-    legend = "".join(
-        f'<li><span class="kyl-swatch" style="background:{CATEGORY_STYLE[slug]}"'
-        f' aria-hidden="true"></span>'
-        f'<span class="kyl-legend-name">'
-        f'{esc(_complaint_type_name(slug, dims))}</span>'
-        f'<span class="kyl-legend-val">{count:,} &middot; {share:.1f}%</span></li>'
-        for slug, count, share in legend_rows
-    )
-
-    coverage = (
-        "These five types account for all of this lender's complaints in the"
-        " dataset."
-        if uncovered == 0
-        else f"{uncovered:,} complaint{'' if uncovered == 1 else 's'} "
-        f"({100 * uncovered / total:.1f}%) fall outside these five types and are"
-        " shown as the grey segment."
-    )
-
-    st.html(
-        '<section class="kyl-card">'
-        "<h3>Share of complaint types</h3>"
-        f'<p class="kyl-note">Out of {esc(plural(total, "CFPB payday complaint"))}'
-        " in this dataset. Hover a segment for its count and share.</p>"
-        f'<div class="kyl-stack" role="img" aria-label="Composition of this'
-        f' lender’s complaints by type: {esc(", ".join(f"{_complaint_type_name(sl, dims)} {sh:.0f} percent" for sl, _c, sh in segments))}.">'
-        f">{bar}</div>"
-        f'<ul class="kyl-legend">{legend}</ul>'
-        f'<p class="kyl-fine">{esc(coverage)} All five complaint types FinePrint'
-        " scores are listed above, including any at zero. The bar itself only"
-        " draws segments with a non-zero share.</p>"
-        "</section>"
-    )
-
-
-def _complaint_type_name(slug: str, dims: dict) -> str:
-    """Human label for a complaint-type slug."""
-    if slug == "other":
-        return "Outside these five types"
-    value = dims.get(slug)
-    return str(value["label"]) if value else slug.replace("_", " ").title()
+    if total < 10:
+        lead = (
+            f"With only {total} complaint{'' if total == 1 else 's'} on record, any"
+            " single category can look dominant by accident, so treat this as a"
+            " starting point rather than a reliable pattern."
+        )
+    else:
+        lead = (
+            f"{subject.capitalize()} {verb} of the CFPB payday-loan complaints"
+            " associated with this lender."
+        )
+    if not guidance:
+        return lead
+    return f"{lead} Worth checking before borrowing: {guidance}."
 
 
 def _render_lender_report(label: dict) -> None:
-    """One report card, one row per dimension, verdict first.
+    """The lender page, ordered as the product question is asked.
 
-    There is deliberately no letter grade. A grade says "this lender is good",
-    and nothing here supports that: the score is a peer-relative posterior whose
-    median dimension rests on zero observed complaints, and for 91% of
-    dimensions the model itself reports that it cannot distinguish the lender
-    from its peers. Banding that into A-F manufactured certainty the analysis
-    does not contain.
-
-    What each row does claim is narrower and supportable: whether this type of
-    complaint makes up a larger, smaller, or indistinguishable share of this
-    lender's payday complaints than among modeled peers. The Method C score is
-    kept, because it preserves information and gives the scale continuity, but
-    it is subordinate to the verdict and to the evidence behind it.
+    Observed complaint profile first, because that is what a consumer came for.
+    Peer comparison second and only where the evidence supports a statement.
+    Evidence last, telling the reader how much to trust the picture above.
+    The Method C score is not a headline; it lives in the per-dimension detail.
     """
-    rows = []
-    for dim in label["dimensions"].values():
-        verdict = COMPARISON_TEXT[dim["comparison"]]
-        qualifier = COMPARISON_QUALIFIER[dim["comparison"]]
-        pct = min(100.0, max(0.0, dim["score"]))
+    total = int(label["n_complaints"])
+    rows = _complaint_rows(label)
+    taxonomy = label.get("issues", {})
+    sparse = total < 10
 
-        facts = [
-            ("Raw score", f"{dim['score']:.1f} of 100"),
-            ("Complaints in this category", f"{dim['complaints']:,}"),
-            ("Share of lender's complaints", f"{dim['prevalence'] * 100:.1f}%"),
-            (
-                "90% credible interval",
-                f"{dim['prevalence_lo90'] * 100:.1f}"
-                f"\u2013{dim['prevalence_hi90'] * 100:.1f}%",
-            ),
-            ("Modeled peer rate", f"{dim.get('peer_rate', 0.0) * 100:.2f}%"),
-        ]
-        dl = "".join(f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in facts)
-
-        scale = (
-            '<div class="kyl-scale">'
-            '<div class="kyl-scale-track">'
-            f'<span class="kyl-scale-fill" style="width:{pct:.1f}%"></span>'
-            '<span class="kyl-scale-peer" style="left:50%"></span>'
-            "</div>"
-            '<div class="kyl-scale-legend">'
-            "<span>0</span><span>modeled peers sit at 50</span><span>100</span>"
-            "</div></div>"
-        )
-
-        rows.append(
-            '<li class="kyl-rowcard" tabindex="0" '
-            f'aria-label="{esc(dim["label"])}: {esc(verdict)}.">'
-            f'<p class="kyl-rowcard-name">{esc(dim["label"])}</p>'
-            '<div class="kyl-rowcard-main">'
-            f'<p class="kyl-rowcard-verdict">{esc(verdict)}</p>'
-            f"{scale}</div>"
-            '<p class="kyl-rowcard-meta">'
-            f'Score <b>{dim["score"]:.0f}</b> / 100'
-            f' &middot; {esc(label["evidence"])}</p>'
-            f'<p class="kyl-rowcard-qualifier">{esc(qualifier)}</p>'
-            f'<div class="kyl-rowcard-detail"><dl>{dl}</dl>'
-            "<p>Shrinkage pulls small samples toward the middle, so a score near"
-            " 50 on little data is mostly the prior rather than a finding about"
-            " this lender.</p></div>"
-            "</li>"
-        )
-
-    _render_verdict_strip(label)
-    _render_composition(label)
-
-    complaints = esc(plural(label["n_complaints"], "CFPB payday complaint"))
+    # --- 1. observed complaint profile: the hero ---
     st.html(
-        '<article class="kyl-report">'
-        '<header class="kyl-report-head"><div>'
-        f'<h2 class="kyl-report-name">{esc(label["name"])}</h2>'
-        f'<p class="kyl-meta" style="margin:.25rem 0 0">{complaints}</p>'
-        "</div>"
-        f'<span class="kyl-badge">{esc(label["evidence"])}</span>'
+        '<header class="kyl-hero">'
+        f"<h2>What consumers report about {esc(label['name'])}</h2>"
+        f'<p class="kyl-hero-sub">Based on {esc(plural(total, "CFPB payday-loan complaint"))}'
+        " in our dataset.</p>"
         "</header>"
-        f'<ul style="list-style:none;margin:0;padding:0">{"".join(rows)}</ul>'
-        "</article>"
     )
+
+    if sparse:
+        st.html(
+            '<div class="kyl-sparse" role="note">'
+            "<h3>Very limited complaint history</h3>"
+            f'<p>CFPB has {total} payday-loan complaint{"" if total == 1 else "s"}'
+            " associated with this lender in our dataset. That is too little"
+            " evidence to characterise its complaint pattern reliably, so the"
+            " shares below describe the complaints we have rather than a stable"
+            " underlying pattern.</p></div>"
+        )
+
+    # --- evidence, stated up front because it governs everything below ---
+    st.html(
+        f'<p class="kyl-evidence-line"><b>{esc(plural(total, "CFPB payday-loan complaint"))}</b>'
+        f' &middot; <b>{esc(label["evidence"])}</b></p>'
+    )
+
+    st.html(
+        f'<p class="kyl-note kyl-denominator">'
+        f"{esc(label.get('complaint_share_note', ''))}</p>"
+    )
+
+    # --- the bars ---
+    st.html(
+        '<p class="kyl-note" style="margin:1rem 0 .4rem">'
+        "Share of this lender&rsquo;s complaints in the dataset, largest first."
+        " Select a row for detail.</p>"
+    )
+
+    bar_rows = []
+    for row in rows:
+        pct = row["share"] * 100
+        bar_rows.append(
+            f'<li class="kyl-crow">'
+            f'<details class="kyl-cdetail">'
+            f'<summary class="kyl-csummary">'
+            f'<span class="kyl-clabel">{esc(row["label"])}</span>'
+            f'<span class="kyl-cbar">'
+            f'<span class="kyl-cbar-fill" style="width:{pct:.2f}%"></span></span>'
+            f'<span class="kyl-cvalue">{row["complaints"]:,} &middot; {pct:.1f}%</span>'
+            f"</summary>"
+            f'<div class="kyl-cbody">'
+            + _complaint_detail(row, taxonomy)
+            + "</div></details></li>"
+        )
+    st.html(f'<ul class="kyl-crows">{"".join(bar_rows)}</ul>')
+
+    # --- what to pay attention to ---
+    st.html(
+        '<section class="kyl-card kyl-watch">'
+        "<h3>What should I pay attention to?</h3>"
+        f'<p class="kyl-note">{esc(_watch_for_summary(label, rows))}</p>'
+        "</section>"
+    )
+
+    # --- peer comparison summary, after the observed picture ---
+    _render_verdict_strip(label)
+
+    st.html(
+        '<p class="kyl-fine">The marks above compare each complaint pattern with'
+        " modeled payday peers, and appear only where the available evidence"
+        " supports a comparison. They are not a grade, and there is no overall"
+        " score for a lender.</p>"
+    )
+
+
+def _complaint_detail(row: dict, taxonomy: dict) -> str:
+    """Inside a row: the issues, the wording, the peer comparison, the score."""
+    parts = []
+
+    issues = row.get("issues") or []
+    if issues:
+        items = "".join(
+            f"<li>{esc(taxonomy.get(key, {}).get('label', key))}"
+            f' <span class="kyl-issue-count">{count:,}</span></li>'
+            for key, count in issues
+        )
+        parts.append(f'<p class="kyl-dlabel">Reported issues</p><ul class="kyl-issues">{items}</ul>')
+    else:
+        parts.append(
+            '<p class="kyl-dlabel">Reported issues</p>'
+            '<p class="kyl-note">No complaints in this category in the dataset.</p>'
+        )
+
+    if row.get("consumers_reported"):
+        parts.append(
+            f'<p class="kyl-dlabel">What that means</p>'
+            f'<p class="kyl-note">{esc(row["consumers_reported"])}</p>'
+        )
+    if row.get("what_to_inspect"):
+        parts.append(
+            f'<p class="kyl-dlabel">What to check</p>'
+            f'<p class="kyl-note">{esc(row["what_to_inspect"])}</p>'
+        )
+
+    if row["slug"] == "other":
+        parts.append(
+            '<p class="kyl-fine">These complaints sit outside the five types'
+            " FinePrint scores separately, so no peer comparison is made for"
+            " them.</p>"
+        )
+        return "".join(parts)
+
+    comparison = row["comparison"]
+    parts.append(
+        f'<p class="kyl-dlabel">Compared with typical peers</p>'
+        f'<p class="kyl-note">{esc(PEER_WORDING[comparison])}</p>'
+    )
+
+    # Method C is model output, so it is disclosure rather than a headline.
+    parts.append(
+        '<details class="kyl-advanced"><summary>Model detail</summary>'
+        f'<p class="kyl-fine">Method C posterior, peer-referenced:'
+        f' {row["score"]:.1f} of 100, where 50 is a typical peer. Posterior'
+        f' estimate {row["prevalence"] * 100:.1f}% of this lender&rsquo;s'
+        f' complaints, 90% credible interval {row["lo90"] * 100:.1f}&ndash;'
+        f'{row["hi90"] * 100:.1f}%. This is a model output on a relative scale,'
+        " not a grade and not a measure of lender quality.</p></details>"
+    )
+    return "".join(parts)
 
 
 def _render_household_result(age, education, income, marital, metro, size, children):
@@ -634,126 +735,156 @@ def _render_household_result(age, education, income, marital, metro, size, child
     )
 
 def _render_methodology() -> None:
-    """Everything about how the numbers are produced and what they cannot mean.
+    """What FinePrint observes, what it calculates, and what it cannot.
 
-    Deliberately kept out of the three product tabs. Each of those answers one
-    question and should read as a clean answer to it; the qualifications belong
-    in one place a reader can choose to open.
-
-    The uncomfortable statistics lead. They are the reason the interface is
-    worded the way it is, and burying them would make the hedging look like a
-    disclaimer rather than as the finding.
+    Kept out of the three product tabs so each of those reads as a clean answer
+    to one question. The uncomfortable sparsity statistics lead, because they
+    are the reason the interface is worded the way it is.
     """
     st.html(
         '<div style="margin:1.5rem 0 1rem">'
         "<h2>Methodology</h2>"
-        '<p class="kyl-note">How each figure is produced, what it supports, and'
-        " where it stops.</p></div>"
+        '<p class="kyl-note">What FinePrint directly observes, what it can'
+        " calculate from that, and where the data stops.</p></div>"
     )
 
     stats = _complaint_evidence_stats()
-
-    if stats:
-        st.html(
-            '<section class="kyl-card">'
-            "<h3>What the complaint data can and cannot support</h3>"
-            '<p class="kyl-note">We set out to rate payday lenders from public'
-            " complaint data. For most dimensions it does not support a"
-            " distinction, and the interface is built to say so rather than to"
-            " paper over it.</p>"
-            '<dl class="kyl-stats">'
-            f"<dt>Comparisons that cannot distinguish a lender from its peers"
-            f"</dt><dd>{stats['similar_pct']:.1f}%</dd>"
-            f"<dt>Dimensions resting on fewer than 10 complaints</dt>"
-            f"<dd>{stats['thin_pct']:.1f}%</dd>"
-            f"<dt>Median complaints behind a single dimension score</dt>"
-            f"<dd>{stats['median_complaints']:.0f}</dd>"
-            f"<dt>Median width of the 90% credible interval</dt>"
-            f"<dd>{stats['median_interval_width']:.0f} percentage points</dd>"
-            "</dl>"
-            f'<p class="kyl-fine">Across all {int(stats["dimensions"]):,}'
-            " lender-dimension comparisons in the dataset. The median dimension"
-            " carries no observed complaints at all, so its score is almost"
-            " entirely the shrinkage prior rather than a finding about the"
-            " lender. This is why there is no letter grade anywhere in this"
-            " interface: a grade would assert a difference the data does not"
-            " support.</p>"
-            "</section>"
-        )
+    total_dims = int(stats["dimensions"]) if stats else 0
+    n_distinct = 4
+    n_lenders = dataset_summary()["lender_count"]
 
     left, right = st.columns(2, gap="large")
 
     with left:
-        summary = dataset_summary()
-        methodology = summary["methodology"]
+        st.markdown("#### What FinePrint directly observes")
+        st.markdown(
+            "Counts and categories of CFPB payday-loan complaints associated with"
+            " each lender, taken from the consumer complaint database. This is"
+            " observed data. It is not modelled, and nothing on a lender page is"
+            " inferred from it beyond arithmetic on these counts."
+        )
+        st.markdown(
+            "<ul>"
+            "<li>The lender's total payday-loan complaint count.</li>"
+            "<li>The count in each of five complaint categories.</li>"
+            "<li>The underlying CFPB issue label behind each of those counts.</li>"
+            "<li>A residual category for complaints outside the five.</li>"
+            "</ul>"
+        )
 
-        st.markdown("#### Lender Complaint Profile")
-        st.markdown(methodology["summary"])
+        st.markdown("#### What FinePrint can calculate directly")
         st.markdown(
-            '<p class="kyl-note">Each dimension is scored 0&ndash;100 by Method C:'
-            " a Beta-Binomial posterior for the lender's complaint rate, referenced"
-            " to the fitted peer population for that complaint type. A typical peer"
-            " sits at <b>50</b>, which is the tick marked on each scale."
-            " Statistical shrinkage pulls thin samples toward that reference, so a"
-            " score near 50 usually means little data rather than typical"
-            " behaviour.</p>",
-            unsafe_allow_html=True,
+            "The composition of a lender's own complaints, which is what the"
+            " profile leads with:"
+        )
+        st.html(
+            '<p class="kyl-formula">ComplaintShare(i,c) ='
+            " Complaints(i,c) / TotalPaydayComplaints(i)</p>",
         )
         st.markdown(
-            '<p class="kyl-note">Each row reports one of three verdicts &mdash;'
-            " more complaints than typical peers, fewer, or similar &mdash; and"
-            " that verdict is the model's own, not a presentational choice. The"
-            " score is shown beneath it to preserve the information, but it is"
-            " model output on a peer-relative scale, not a grade, and it is not a"
-            " quality ranking of the lender. The CFPB has not classified any"
-            " lender as safe or unsafe, and neither does this model.</p>",
-            unsafe_allow_html=True,
+            "The five category counts and the residual add up to the lender's"
+            " total, and their shares sum to one. That identity is asserted for"
+            " every lender in the test suite."
+        )
+
+        st.markdown("#### What FinePrint cannot calculate")
+        st.markdown(
+            "A customer-level complaint rate. We do not have customer counts,"
+            " loans originated, transaction volume or market share for any lender"
+            " in this dataset, so the denominator of the obvious rate is missing:"
+        )
+        st.html(
+            '<p class="kyl-formula kyl-formula-blocked">ComplaintRate ='
+            " Complaints / Customers or Loans &mdash; not computable here</p>",
         )
         st.markdown(
-            "**Evidence strength** describes how much complaint data supports the"
-            " scores for a lender as a whole, not how good or bad that lender is."
-            " More complaints usually means more customers, not more misconduct."
-        )
-        bands = "".join(
-            f"<li>{esc(b['label'])} &mdash; {b['min_complaints']}+ complaints</li>"
-            for b in sorted(
-                methodology["evidence_bands"], key=lambda b: b["min_complaints"]
-            )
-        )
-        st.markdown(f"<ul>{bands}</ul>", unsafe_allow_html=True)
-        st.markdown("**Caveats**")
-        for caveat in methodology["caveats"]:
-            st.markdown(f"- {caveat}")
-        st.markdown(
-            f'<p class="kyl-fine">Method: {esc(summary["method"])}. Dataset:'
-            f' {esc(summary["lender_count"])} lenders,'
-            f' {esc(summary["total_complaints"])} complaints. The five dimensions'
-            " overlap, which is why they are reported separately and never"
-            " combined into a single figure.</p>",
-            unsafe_allow_html=True,
+            "This is why a share on a lender page is always stated as a share"
+            " **of that lender's complaints**. A lender with 40% of its complaints"
+            " about fees is not thereby a lender where 40% of customers"
+            " experienced a fee problem, and the two statements are not"
+            " interchangeable."
         )
 
     with right:
+        st.markdown("#### Why Bayesian modelling is still used")
+        st.markdown(
+            "Because deciding whether an observed pattern is unusual requires"
+            " more than comparing two numbers. Method C fits a Beta-Binomial"
+            " posterior for each category, referenced to a fitted peer population"
+            " whose median is the reference rate. A typical peer sits at 50 on"
+            " that scale."
+        )
+        st.markdown(
+            "Shrinkage is what stops a lender with two complaints from being"
+            " reported as extreme. Its estimate is pulled toward the peer"
+            " reference in proportion to how little data supports it, and a"
+            " comparison is only stated when the 90% credible interval sits"
+            " entirely on one side of the reference. Where it straddles it, the"
+            " page says the data does not distinguish the lender from peers."
+        )
+        st.markdown(
+            "The model is not used to produce the complaint profile, and it does"
+            " not rank lenders. It only decides whether a peer comparison is"
+            " responsible to make."
+        )
+
+        if stats:
+            st.html(
+                '<section class="kyl-card">'
+                "<h3>How much the data supports</h3>"
+                '<p class="kyl-note">Across all'
+                f" {total_dims:,} lender-category observations in the dataset,"
+                " measured on the current model:</p>"
+                '<dl class="kyl-stats">'
+                f"<dt>Observations not distinguishable from typical peers</dt>"
+                f"<dd>{stats['similar_pct']:.1f}%</dd>"
+                f"<dt>Observations resting on fewer than 10 complaints</dt>"
+                f"<dd>{stats['thin_pct']:.1f}%</dd>"
+                f"<dt>Median complaints behind a single observation</dt>"
+                f"<dd>{stats['median_complaints']:.0f}</dd>"
+                f"<dt>Median width of the 90% credible interval</dt>"
+                f"<dd>{stats['median_interval_width']:.0f} percentage points</dd>"
+                "</dl>"
+                f'<p class="kyl-fine">Most observations are sparse, and the'
+                f" median one carries no observed complaints at all. Only {n_distinct}"
+                f" of {n_lenders} lenders are distinguishable across all five"
+                " categories.</p></section>"
+            )
+
+        st.markdown("#### What that means for this product")
+        st.markdown(
+            "FinePrint therefore does not rank lenders by overall quality, and it"
+            " publishes no overall score. It shows the observed complaint pattern,"
+            " and makes a peer comparison only where the available evidence"
+            " supports one. That is a limitation of what public complaint data"
+            " can establish, not a claim that lender quality is unmeasurable in"
+            " principle &mdash; it would need exposure denominators this dataset"
+            " does not contain."
+        )
+
+        summary = dataset_summary()
+        st.markdown("#### Complaint data caveats")
+        for caveat in summary["methodology"]["caveats"]:
+            st.markdown(f"- {caveat}")
+
         ctx = _HOUSEHOLD_CONTEXT
         st.markdown("#### Household Financial Context")
         if ctx:
             st.markdown(
-                f'<p class="kyl-note">A gradient-boosted classifier over the'
+                f'A separate analysis, from a different source. A'
+                f' gradient-boosted classifier over the'
                 f' {esc(ctx["households_modelled"])} households in the'
-                f' {esc(ctx["survey"])} ({esc(ctx["survey_year"])}) that estimates'
-                f' the survey item &ldquo;{esc(ctx["target"])}&rdquo; as a proxy for'
-                f' financial strain. Weighted holdout ROC-AUC'
+                f' {esc(ctx["survey"])} ({esc(ctx["survey_year"])}) estimating the'
+                f' survey item "{esc(ctx["target"])}" as a proxy for financial'
+                f' strain. Weighted holdout ROC-AUC'
                 f' <b>{ctx["weighted_roc_auc"]:.4f}</b> on an 80/20 stratified'
-                f' split, seed {esc(ctx["seed"])}.</p>',
-                unsafe_allow_html=True,
+                f" split, seed {esc(ctx['seed'])}."
             )
             st.markdown(
-                '<p class="kyl-note">SNAP receipt is a proxy for strain, not a'
-                f' benefit calculation. The figure is an association measured'
-                f' against a {esc(ctx["survey_year"])} survey and is easy to'
-                " over-read as a personal forecast. It is not an eligibility"
-                " determination.</p>",
-                unsafe_allow_html=True,
+                "It is a survey association, not an eligibility determination and"
+                " not a personal forecast, and it says nothing about any lender."
+                " The two analyses are never combined and there is no overall"
+                " FinePrint score."
             )
             st.markdown("**Caveats**")
             for caveat in ctx.get("caveats", []):
@@ -761,37 +892,19 @@ def _render_methodology() -> None:
 
         st.markdown("#### Loan Payoff Calculator")
         st.markdown(
-            '<p class="kyl-note">Standard amortisation. Monthly interest is'
-            " principal &times; APR / 12; payoff time solves the standard annuity"
-            " equation and is rounded up to a whole month. It is arithmetic on the"
-            " numbers entered &mdash; not a quote, an offer, a rate comparison, or"
-            " financial advice, and it ignores fees, missed payments and any rate"
-            " change.</p>",
-            unsafe_allow_html=True,
-        )
-
-        st.markdown("#### Why the composition is a bar, not a pie")
-        st.markdown(
-            '<p class="kyl-note">The five complaint types do not always account'
-            " for a lender's whole complaint file. Across the dataset they cover a"
-            " mean of 78%, and for a large minority of lenders most complaints"
-            " fall outside them. A pie chart requires its slices to sum to the"
-            " whole, so drawing these five as a full circle would assert that they"
-            " are the entire composition. The uncovered remainder is therefore"
-            " drawn as its own segment. A bar is also the honest form here because"
-            " the median lender has four of the five categories at zero, which"
-            " would make most pies a single slice.</p>",
-            unsafe_allow_html=True,
+            "Standard amortisation. Monthly interest is principal x APR / 12;"
+            " payoff time solves the standard annuity equation, rounded up to a"
+            " whole month. It is arithmetic on the numbers entered, not a quote,"
+            " an offer, a rate comparison, or financial advice, and it ignores"
+            " fees, missed payments and any rate change."
         )
 
         st.markdown("#### Two models, not one")
         st.markdown(
-            '<p class="kyl-note">This app scores with an eight-feature prototype.'
-            " The FastAPI service behind the production interface serves a"
-            " nine-feature model that also uses county poverty share and scores"
-            " marginally higher. The two are not interchangeable and their figures"
-            " should not be quoted for one another.</p>",
-            unsafe_allow_html=True,
+            "This app reads an eight-feature prototype artifact. The FastAPI"
+            " service behind the production interface serves a nine-feature model"
+            " that also uses county poverty share. The two are not interchangeable"
+            " and their figures should not be quoted for one another."
         )
 
         st.markdown("#### Sources")
@@ -799,7 +912,7 @@ def _render_methodology() -> None:
             '<ul class="kyl-list">'
             "<li>CFPB consumer complaint database, payday loan products.</li>"
             "<li>CFPB National Financial Well-Being Survey, public-use file.</li>"
-            '<li>Official SNAP program information:'
+            f'<li>Official SNAP program information:'
             f' <a href="{esc(SNAP_OFFICIAL)}" target="_blank"'
             f' rel="noopener noreferrer">USDA Food and Nutrition Service</a>.</li>'
             "</ul>",
@@ -807,12 +920,13 @@ def _render_methodology() -> None:
         )
         st.markdown(
             '<p class="kyl-fine">Complaints are consumer-submitted reports and do'
-            " not necessarily indicate verified wrongdoing. Complaint volume is"
-            " used to communicate evidence strength; a lender is not penalised for"
-            " having more complaints, because lender-level customer and loan-volume"
-            " denominators are not available.</p>",
+            " not necessarily indicate verified wrongdoing. A complaint is an"
+            " allegation by a consumer, not a finding about the lender, and this"
+            " interface describes what was reported rather than what occurred."
+            "</p>",
             unsafe_allow_html=True,
         )
+
 
 # --------------------------------------------------------------------------
 # Page shell
