@@ -53,7 +53,7 @@ const submitQuery = async (page, q) => {
       ...document.querySelectorAll(
         '[data-testid="stButton"] button, [data-testid="stFormSubmitButton"] button',
       ),
-    ].find((x) => /show me/i.test(x.innerText || ""));
+    ].find((x) => /analyze with ai/i.test(x.innerText || ""));
     if (b) b.click();
   });
   await settle(4500);

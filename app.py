@@ -79,6 +79,7 @@ try:
         PEER_MARK_DISCLOSURE,
         build_narrative,
     )
+    from app.chat.tools import find_lenders as _find_lenders
     from app.chat.tools import match_lenders_in_text as _match_lenders
     from app.chat.router import (
         EXAMPLES as _EXAMPLES,
@@ -95,6 +96,7 @@ except ImportError as _exc:  # pragma: no cover
     _estimate_payoff = None
     _build_analysis = None
     _route = None
+    _find_lenders = None
     _match_lenders = None
     _EXAMPLES: tuple = ()
     _PLACEHOLDER = ""
@@ -1235,19 +1237,24 @@ _query_col, panels_col = st.columns([1, 2], gap="large")
 with _query_col:
     st.html(
         '<div style="margin:1.5rem 0 .6rem">'
-        "<h2>Ask about a lender or an offer</h2>"
+        "<h2>Type in your offer</h2>"
         f'<p class="kyl-note">{esc(PLACEHOLDER)}</p>'
         "</div>"
     )
 
     with st.form(f"{CHAT_KEY}_form", border=False):
+        # No visible label. The heading above already says what the field is, and
+        # the panel now leads with an offer rather than a question, so a second
+        # "Your question" contradicted it. Collapsed rather than hidden outright
+        # so the control keeps its accessible name.
         _query = st.text_area(
             "Your question",
             placeholder="Uprova Credit, $300 at 391% for 14 days",
             height=120,
             key=f"{CHAT_KEY}_query",
+            label_visibility="collapsed",
         )
-        _submitted = st.form_submit_button("Show me", type="primary")
+        _submitted = st.form_submit_button("Analyze with AI", type="primary")
 
     if _submitted and _query.strip():
         st.session_state[CHAT_KEY] = _query.strip()
@@ -1323,16 +1330,24 @@ with panels_col:
         _from_query = bool(_route and _route.has_lender and _route.lender_name == _manual_lender)
         _lender_id = _route.lender_id if (_route and _route.has_lender) else None
         if not _from_query and _manual_lender.strip():
-            _hits = _match_lenders(_manual_lender)
+            # find_lenders, not match_lenders_in_text. The field is a type-ahead,
+            # so what someone types is a fragment of a name ("upr"), and the
+            # fragment has to be looked for inside each name. The other function
+            # answers the opposite question, a name inside a sentence, which is
+            # what the query box needs and what this field was wrongly given.
+            _found = _find_lenders(query=_manual_lender.strip(), limit=6)
+            _hits = _found["data"]["lenders"] if _found.get("ok") else []
             if len(_hits) == 1:
                 _lender_id = _hits[0]["id"]
             elif len(_hits) > 1:
                 _lender_id = None
                 st.html(
                     '<p class="kyl-note">More than one lender matches that'
-                    f" name: {esc(', '.join(h['name'] for h in _hits))}.</p>"
+                    f" name: {esc(', '.join(h['name'] for h in _hits))}. Keep"
+                    " typing to narrow it down.</p>"
                 )
             else:
+                _lender_id = None
                 st.html(
                     '<p class="kyl-note">No lender in the dataset matches'
                     f" {esc(_manual_lender.strip())!r}.</p>"
@@ -1345,7 +1360,12 @@ with panels_col:
                 "lender",
                 _fingerprint(lender=_lender_id, n=_lender_label["n_complaints"]),
                 lambda: _lender_analysis(_lender_label),
-                from_query=True,
+                # The same rule as the other two panels: generate straight away
+                # while the name is the one the query supplied, and clear to the
+                # regenerate prompt once it has been typed over. Hardcoding True
+                # here made the lender panel the only one whose analysis could
+                # never go stale, which read as the cleared box being broken.
+                from_query=_from_query,
             )
         else:
             st.html(

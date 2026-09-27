@@ -564,6 +564,19 @@ background:{t['primary_soft']}; border-color: #B9C6F5; color: {t['primary']};
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }}
 
+/* The query field's own label is redundant: the heading above it already says
+   what the field is, and it read "Your question" against a heading that now says
+   "Type in your offer". Streamlit's label_visibility="collapsed" still rendered
+   it, so it is hidden here instead.
+
+   Visually hidden rather than display:none, so the control keeps its accessible
+   name; a screen reader still announces the field. Scoped to the widget's key
+   class, which Streamlit derives from the key and which is therefore stable. */
+.st-key-kyl_chat_query label {{
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}}
+
 /* Result readout after a successful estimate. */
 .kyl-outcome-lab{{ font-size: .8rem; font-weight: 700; letter-spacing: .04em;
 text-transform: uppercase; color:{t['muted']}; margin-bottom: .2rem; }}
