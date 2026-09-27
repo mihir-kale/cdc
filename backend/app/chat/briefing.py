@@ -319,13 +319,25 @@ def _household_section(profile: dict[str, Any] | None) -> Section:
             empty=True,
         )
     d = result["data"]
-    lines = [
-        f"Households with a profile like yours sit in the"
-        f" {str(d.get('band_label', '')).lower()}, at the"
-        f" {d.get('survey_percentile')}th percentile of the survey reference"
-        " distribution.",
-    ]
-    numbers = [float(d.get("survey_percentile") or 0)]
+    band = str(d.get("band_label") or "").strip()
+    pct = d.get("survey_percentile")
+    if band and isinstance(pct, int):
+        # Appended, not interpolated: the band sentence already reads "than most
+        # surveyed households", so "sit in the <band>" produced "sit in the lower
+        # strain than most surveyed households". This phrasing is duplicated from
+        # chat/analysis.py; keep the two in step.
+        lines = [
+            f"Your household sits at the {pct}th percentile of the surveyed"
+            f" population \u2014 {band.lower()}."
+        ]
+    else:
+        # Never interpolate a missing figure. A bare {None}th read as "Noneth
+        # percentile" in this sentence before it was guarded.
+        lines = [
+            "The survey comparison could not be placed for this profile, so no"
+            " percentile is shown."
+        ]
+    numbers = [float(pct)] if isinstance(pct, int) else []
     return Section(
         key="household",
         heading=heading,

@@ -13,6 +13,7 @@ from __future__ import annotations
 import unittest
 
 from app.chat import guard, scope, tools
+from app.chat import briefing
 from app.chat.briefing import build_briefing
 from app.chat.model import ScriptedModel
 from app.chat.offer import implied_apr, parse_offer
@@ -251,6 +252,70 @@ class TestOfferRouting(unittest.TestCase):
     def test_question_path_still_works(self) -> None:
         r = answer("what should I pay attention to?")
         self.assertIn(r.outcome, {"answer", "guarded", "out_of_scope"})
+
+
+class TestNoMissingFigureIsInterpolated(unittest.TestCase):
+    """No rendered sentence may contain a raw missing value.
+
+    The household sentence was duplicated in two modules -- chat/analysis.py for
+    the panel's "What this means" box and chat/briefing.py for the offer
+    briefing -- and the same defect had to be fixed in both. The first fix was
+    made after reading only one of them, so the other kept shipping
+    "...at the Noneth percentile of the survey reference distribution."
+
+    These assert the shape of the sentence rather than the exact wording, so a
+    reword does not break them, and they cover both copies.
+    """
+
+    PROFILE = {
+        "age_band": 3, "education": 3, "household_income": 4, "marital_status": 1,
+        "household_size": 3, "metro_area": 1, "county_poverty_share": -5,
+    }
+
+    def test_briefing_household_sentence_is_grammatical(self) -> None:
+        section = briefing._household_section(self.PROFILE)
+        sentence = section.lines[0]
+        self.assertNotIn("None", sentence)
+        self.assertNotIn("Noneth", sentence)
+        # The band sentence already ends "...than most surveyed households", so
+        # interpolating it after "sit in the" reads as a non sequitur.
+        self.assertNotIn("sit in the", sentence)
+        self.assertRegex(sentence, r"\d+th percentile")
+
+    def test_briefing_survives_a_missing_percentile(self) -> None:
+        real = tools.call
+        tools.call = lambda *a, **k: {  # type: ignore[assignment]
+            "ok": True,
+            "data": {"band_label": "Lower financial strain than most surveyed households",
+                     "survey_percentile": None},
+        }
+        try:
+            sentence = briefing._household_section(self.PROFILE).lines[0]
+        finally:
+            tools.call = real
+        self.assertNotIn("None", sentence)
+        self.assertNotIn("None percentile", sentence)
+
+    def test_panel_analysis_sentence_is_grammatical(self) -> None:
+        from app.chat import analysis
+
+        out = analysis._floor_text(
+            "household",
+            {"band_label": "Lower financial strain than most surveyed households",
+             "percentile": 18, "rate": 4.7},
+        )
+        self.assertNotIn("None", out)
+        self.assertNotIn("sit in the", out)
+        self.assertIn("18th percentile", out)
+
+    def test_panel_analysis_survives_a_missing_percentile(self) -> None:
+        from app.chat import analysis
+
+        out = analysis._floor_text(
+            "household", {"band_label": "Typical financial strain", "rate": 5.0}
+        )
+        self.assertNotIn("None", out)
+        self.assertNotIn("Noneth", out)
 
 
 class TestScoreClaims(unittest.TestCase):
