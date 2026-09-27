@@ -1,4 +1,4 @@
-"""Know Your Lender — a Streamlit front end for the FinePrint analysis.
+"""Know Your Loan — a Streamlit front end for the FinePrint analysis.
 
 Three tools, deliberately kept apart because they answer different questions
 from different data:
@@ -995,7 +995,7 @@ def _render_methodology() -> None:
 # --------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Know Your Lender",
+    page_title="Know Your Loan",
     page_icon=":bar_chart:",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -1008,16 +1008,24 @@ st.markdown(stylesheet(), unsafe_allow_html=True)
 # server.enableStaticServing is on in .streamlit/config.toml. If it ever fails to
 # load the alt text stands in for it, so the masthead never collapses.
 st.html(
-    '<header style="margin:0 0 1.5rem">'
-    '<span class="kyl-brand">'
-    '<img class="kyl-logo" src="app/static/kyl-logo.png" alt="" width="30" height="24">'
+    # A teal band rather than plain text on the page, so the brand colour does
+    # some work instead of appearing only in buttons and focus rings. The mark
+    # sits in a white tile rather than straight on the teal: the shark's outline
+    # is near-black and would disappear into a dark ground.
+    '<header class="kyl-header">'
+    '<span class="kyl-header-mark">'
+    '<img src="app/static/kyl-logo.png" alt="" width="40" height="33">'
     "</span>"
-    '<p class="kyl-mark">Know Your Lender</p>'
-    '<p class="kyl-tag">Three independent tools for payday-loan questions</p>'
-    '<p class="kyl-lede">Explore CFPB complaint patterns, understand a household’s'
+    '<span class="kyl-header-text">'
+    '<span class="kyl-mark">Know Your Loan</span>'
+    '<span class="kyl-tag">Three independent tools for payday-loan questions</span>'
+    "</span>"
+    "</header>"
+)
+st.html(
+    '<p class="kyl-lede">Explore CFPB complaint patterns, understand a household\u2019s'
     " position within survey data, and estimate the cost and timeline of repaying a"
     " loan.</p>"
-    "</header>"
 )
 
 EXAMPLES = _EXAMPLES

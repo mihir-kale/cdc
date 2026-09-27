@@ -55,7 +55,7 @@ class ChatModel(Protocol):
         ...
 
 
-SYSTEM_PROMPT = """You are the assistant for Know Your Lender, which analyses \
+SYSTEM_PROMPT = """You are the assistant for Know Your Loan, which analyses \
 CFPB consumer complaint data about payday lenders.
 
 You answer questions by calling the provided tools. You cannot look anything up

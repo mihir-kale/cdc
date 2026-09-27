@@ -1,4 +1,4 @@
-"""Design tokens and scoped stylesheet for the Know Your Lender Streamlit app.
+"""Design tokens and scoped stylesheet for the Know Your Loan Streamlit app.
 Every colour, size and radius used by the interface is declared once in
 :data:`TOKENS` and the stylesheet below is generated from it, so there is one
 place to change the palette and no chance of a hardcoded colour drifting away
@@ -298,25 +298,43 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
 [data-testid="stAlert"] p{{ font-size: .9rem; line-height: 1.5; }}
 
 /* ------------------------------------------------------- kyl components */
-/* Masthead: the logo sits above the wordmark, small and left.
-   static/kyl-logo.png is the source artwork trimmed to its content and scaled to
-   2x this size. Trimming matters: the original is 674x598 with the mark in a
-   287x234 box, so rendering the file as-is at this size would draw the mark at
-   roughly a third of it and leave a speck. Re-measure and re-trim if the source
-   artwork is replaced. */
-.kyl-brand {{
-  display: block; margin: 0 0 .3rem; line-height: 0;
+/* Masthead. A teal band, the mark in a white tile on the left, the name and
+   tagline beside it.
+
+   The tile is not decoration. The shark's outline is near-black, and laid
+   directly on the deep teal the outline disappears and the shape loses its
+   edge; a white ground keeps the silhouette readable and looks deliberate.
+
+   static/kyl-logo.png is new.png, which arrives already cropped to its content
+   with the background removed at 287x234, so no trimming happens here. */
+.kyl-header {{
+  display: flex; align-items: center; gap: .9rem;
+  background: {t['primary']};
+  border-radius: {t['radius']};
+  padding: .95rem 1.25rem;
+  margin: 0 0 .9rem;
 }}
-.kyl-logo {{
-  display: block; width: 1.85rem; height: 1.5rem; object-fit: contain;
+.kyl-header-mark {{
+  display: flex; align-items: center; justify-content: center;
+  width: 3.25rem; height: 3.25rem; flex: 0 0 auto;
+  background: #FFFFFF; border-radius: 10px;
 }}
+.kyl-header-mark img {{
+  display: block; width: 2.5rem; height: auto;
+}}
+.kyl-header-text {{ display: block; min-width: 0; }}
 /* Wordmark. The heaviest use of the display face. */
 .kyl-mark{{
   font-family:{t['font_display']};
-  font-size: 2.5rem; font-weight: 700; letter-spacing: -.02em;
-color:{t['text']}; line-height: 1.1; margin: 0;
+  font-size: 2.1rem; font-weight: 700; letter-spacing: -.02em;
+  color: #FFFFFF; line-height: 1.1; margin: 0; display: block;
 }}
-.kyl-tag{{ color: {t['muted']}; font-size: 1rem; margin: .3rem 0 0; }}
+/* Tagline on the band, so it is knocked back from the wordmark rather than
+   competing with it. */
+.kyl-tag{{
+  color: rgba(255, 255, 255, .82); font-size: .95rem;
+  margin: .2rem 0 0; display: block;
+}}
 .kyl-lede{{ color: {t['muted']}; font-size: 1.05rem; line-height: 1.6; margin: .6rem 0 0; }}
 
 /* Section shell so every block sits on one card surface with one border. */

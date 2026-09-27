@@ -32,7 +32,7 @@ const check = (name, pass, detail = "") => {
 const waitApp = async (page) => {
   await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout: 120000 });
   await page.waitForFunction(
-    () => (document.body.innerText || "").includes("Know Your Lender"),
+    () => (document.body.innerText || "").includes("Know Your Loan"),
     { timeout: 120000, polling: 500 },
   );
   await new Promise((r) => setTimeout(r, 1200));

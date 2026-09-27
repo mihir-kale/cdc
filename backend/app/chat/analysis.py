@@ -50,7 +50,7 @@ HOUSEHOLD_LIMIT = (
 )
 
 SYSTEM = """You are writing the short analysis shown beside one panel in \
-Know Your Lender, which analyses CFPB consumer complaint data about payday \
+Know Your Loan, which analyses CFPB consumer complaint data about payday \
 lenders.
 
 You are given the figures that panel is displaying. Write two or three plain \

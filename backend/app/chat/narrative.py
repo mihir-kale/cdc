@@ -42,7 +42,7 @@ PEER_MARK_DISCLOSURE = (
 )
 
 NARRATIVE_SYSTEM = """You are writing the short interpretive passage on a \
-lender page in Know Your Lender, which analyses CFPB consumer complaint data \
+lender page in Know Your Loan, which analyses CFPB consumer complaint data \
 about payday lenders.
 
 You are given that lender's observed complaint mix, its peer comparisons, its \
