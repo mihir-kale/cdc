@@ -383,10 +383,10 @@ def _render_comparison_table(lenders: list[dict], needle: str) -> None:
             ),
         },
     )
-st.html(
-    '<p class="kyl-fine"> Sorted by name, not by any measure of quality.'
-    '</p>'
-)
+    st.html(
+        '<p class="kyl-fine"> Sorted by name, not by any measure of quality.'
+        '</p>'
+    )
     return frame, event
 
 
