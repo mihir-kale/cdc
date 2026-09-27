@@ -22,8 +22,8 @@
 [theme]
 base = "light"
 primaryColor = "#0E7490"
-backgroundColor = "#F7F8FA"
-secondaryBackgroundColor = "#FFFFFF"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#bbe8f8"
 textColor = "#101828"
 font = "Titillium Web"
 
