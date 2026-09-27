@@ -298,8 +298,8 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
 [data-testid="stAlert"] p{{ font-size: .9rem; line-height: 1.5; }}
 
 /* ------------------------------------------------------- kyl components */
-/* Masthead. A full-bleed teal band, mark in a white tile on the left, name and
-   tagline beside it.
+/* Masthead. A full-bleed teal band, the mark on the left, name and tagline
+   beside it.
 
    Full-bleed because inside .block-container the band was capped at 1120px and
    centred, so on a wide screen it read as a card floating in white with 160px
@@ -312,12 +312,12 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
    The inner wrapper restores the page's own measure and side padding, so the
    wordmark lines up with the content below rather than hugging the window edge.
 
-   The white tile under the mark is not decoration. The shark's outline is
-   near-black, and laid directly on the deep teal the outline disappears and the
-   silhouette loses its edge.
-
-   static/kyl-logo.png is new.png, which arrives already cropped to its content
-   with the background removed at 287x234, so no trimming happens here. */
+   The mark sits directly on the band with no tile behind it. static/kyl-logo.png
+   is new.png, which arrives already cropped to its content at 287x234 with its
+   background genuinely removed -- the corners are (0,0,0,0) and 38% of the
+   pixels are fully transparent -- so a white plate would only be covering
+   something that is not there. The shark is also drawn in pale blue and white,
+   which clear the deep teal at 3.6:1 and 5.4:1, so it stands on its own. */
 .kyl-header {{
   /* Break out of the centred 1120px container to the full viewport width. */
   margin-left: calc(50% - 50vw);
@@ -361,13 +361,13 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
   padding: 0 1.5rem;
   display: flex; align-items: center; gap: .9rem;
 }}
+/* The mark. No plate, no border: the asset is already background-free, so the
+   only thing this needs to do is stop the shark from flexing. */
 .kyl-header-mark {{
-  display: flex; align-items: center; justify-content: center;
-  width: 3.25rem; height: 3.25rem; flex: 0 0 auto;
-  background: #FFFFFF; border-radius: 10px;
+  display: flex; align-items: center; flex: 0 0 auto;
 }}
 .kyl-header-mark img {{
-  display: block; width: 2.5rem; height: auto;
+  display: block; width: 2.75rem; height: auto;
 }}
 .kyl-header-text {{ display: block; min-width: 0; }}
 /* Wordmark. The heaviest use of the display face. */

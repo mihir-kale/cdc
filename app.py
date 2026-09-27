@@ -1004,15 +1004,15 @@ st.markdown(stylesheet(), unsafe_allow_html=True)
 st.html(
     # A teal band rather than plain text on the page, so the brand colour does
     # some work instead of appearing only in buttons and focus rings. The mark
-    # sits in a white tile rather than straight on the teal: the shark's outline
-    # is near-black and would disappear into a dark ground.
+    # goes straight onto it: the shark is drawn in pale blue and white, which
+    # both clear the deep teal, and its background is already transparent.
     # The band is full-bleed, so its content needs an inner wrapper constrained
     # to the same 1120px column the page below uses, otherwise the wordmark
     # would sit against the viewport edge while everything else is inset.
     '<header class="kyl-header">'
     '<div class="kyl-header-inner">'
     '<span class="kyl-header-mark">'
-    '<img src="app/static/kyl-logo.png" alt="" width="40" height="33">'
+    '<img src="app/static/kyl-logo.png" alt="" width="44" height="36">'
     "</span>"
     '<span class="kyl-header-text">'
     '<span class="kyl-mark">Know Your Loan</span>'
