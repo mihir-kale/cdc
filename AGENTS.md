@@ -11,7 +11,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py                      # product on :8501
 
-cd backend && python -m unittest discover -s ../tests    # 189 tests
+cd backend && python -m unittest discover -s ../tests    # 206 tests
 cd browser-checks && npm install && node verify-panels.mjs   # 32 checks, needs :8899
 ```
 
@@ -125,12 +125,29 @@ Two things to preserve:
 If you add a tool, it goes in `tools.py` as the only path to the data, and the
 guard needs to know about any new kind of claim it could make.
 
-## There is no LLM endpoint
+## The model is optional, and the guard is why that is safe
 
-`_narrative_model()` and `_analysis_model()` return `None`; the deterministic
-text renders. The seam is built and tested — a real `ChatModel` changes only the
-prose, because the guard runs on the finished reply either way. Keep it that way:
-a model that can only phrase tool output cannot invent a figure.
+`_narrative_model()` and `_analysis_model()` both return a Gemini client when a
+key is configured, and `None` when one is not. With no key the app is complete
+and makes no network call, so **never let a test or a deploy depend on a key
+being present.**
+
+Key resolution lives in `resolve_gemini_config()` in `app/chat/model.py`, not in
+`app.py`, because `app.py` is a Streamlit script and cannot be imported by the
+test suite (`import app` resolves to the backend package — see the collision
+note above). Keep the decision pure and testable; only the `st.secrets` read
+belongs in the UI layer.
+
+The SDK is `google-genai` and is imported **lazily**, inside the client, because
+CI installs `backend/requirements-test.txt` and never the root
+`requirements.txt` where it is pinned. A module-level import would break the
+suite on a clean checkout.
+
+An API error, an empty reply, or a reply the guard rejects all fall back to the
+deterministic text. Do not "improve" that by surfacing the error to the user: the
+fallback is what makes a hostile or broken model a cosmetic problem. Verified
+end to end — with a key set, a model returning "PREDATORY, risk score 12/100,
+you should not borrow" reaches nothing in the rendered page.
 
 ## Where things are not obvious
 

@@ -61,7 +61,7 @@ lender, and no lender result says anything about the reader.
                     scope   may this be answered at all      │
                     tools   the only path to the data        │
                     router  query → which panels open        │
-                    model   the seam a real LLM drops into   │
+                    model   the Gemini client (optional)     │
                     guard   checks the finished reply        │
                     analysis, narrative, offer, orchestrator │
                                                           │
@@ -131,7 +131,7 @@ in `.streamlit/config.toml`, which is what makes `static/` reachable at all.
 ### Verifying a change
 
 ```bash
-# 189 unit tests
+# 206 unit tests
 cd backend && python -m unittest discover -s ../tests
 
 # 32 real-browser checks against a running app
@@ -234,7 +234,7 @@ no single component is trusted:
 | `scope.py`      | Decides in Python whether a question may be answered at all   |
 | `tools.py`      | The only path to the complaint data, survey model and maths   |
 | `router.py`     | Decides which panels a query justifies opening               |
-| `model.py`      | The seam a real LLM client drops into, plus deterministic stubs |
+| `model.py`      | The Gemini client, plus deterministic stubs |
 | `guard.py`      | Checks the finished reply                                    |
 | `analysis.py`   | The "What this means" box beside each panel                  |
 | `narrative.py`  | The lender narrative, and its required disclosure            |
@@ -242,9 +242,34 @@ no single component is trusted:
 | `briefing.py`   | The three-part offer briefing                                |
 | `orchestrator.py` | Wires the above together                                   |
 
-**There is no live LLM endpoint.** `_narrative_model()` and `_analysis_model()`
-return `None`, so the deterministic text is what currently renders. The seam is
-built and tested; dropping in a `ChatModel` changes only the prose.
+### Configuring the model
+
+**With no key configured the app is complete and fully functional** — every
+panel renders its deterministic text, and no network call is made. Adding a key
+changes the prose and nothing else.
+
+Paste a key into `.streamlit/secrets.toml` (copy `.streamlit/secrets.toml.example`),
+or into **Settings → Secrets** on Streamlit Community Cloud:
+
+```toml
+[gemini]
+api_key = "PASTE_YOUR_KEY_HERE"
+# model = "gemini-3.5-flash"   # optional
+```
+
+For a local run without a secrets file, `GEMINI_API_KEY` or `GOOGLE_API_KEY` in
+the environment is equivalent. Create a key at
+<https://aistudio.google.com/apikey>.
+
+The client is `google-genai`, the current GA SDK. (`google-generativeai` is the
+deprecated predecessor and is not used.) The SDK is imported lazily, so the app
+starts and runs without it.
+
+`_narrative_model()` and `_analysis_model()` in `app.py` are the two hooks, and
+both return the same cached client. A reply is used only if it survives the
+guard; an API error, an empty reply, or a rejected reply all fall back to the
+deterministic text, so **a broken or hostile model degrades the prose and
+nothing else**.
 
 The guard is the part that matters. It rejects rankings, lender verdicts, risk
 and credit scores, unsolicited advice, and any figure that was not in the tool
@@ -300,13 +325,17 @@ households) *is* committed; 6,232 of them are modelled.
 
 ## Environment variables
 
-The backend needs **no secrets and no API keys**. The only setting is CORS.
+The backend needs **no secrets**. Its only setting is CORS.
 
 | Variable                    | Where   | Purpose                                                       |
 | --------------------------- | ------- | ------------------------------------------------------------- |
 | `FINEPRINT_ALLOWED_ORIGINS` | backend | Comma-separated browser origins. Defaults to `localhost:3000` |
 
-Never commit real credentials. `app.py` takes no configuration at all.
+`app.py` takes no configuration at all to run. The only credential it will ever
+accept is a Gemini API key, and that is optional — see
+[Configuring the model](#configuring-the-model). Never commit a real key:
+`.streamlit/secrets.toml` is git-ignored and only `secrets.toml.example` is
+tracked.
 
 ## Deployment
 

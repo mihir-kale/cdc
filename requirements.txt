@@ -49,6 +49,13 @@
 # a layout between deploys -- the wrong time to discover it mid-refactor. Bump
 # this deliberately, alongside a local run of `streamlit run app.py`.
 streamlit==1.64.0
+
+# Gemini client for the written interpretation and the per-panel analysis.
+# Optional in practice: backend/app/chat/model.py imports it lazily, so the app
+# runs its deterministic text if it is absent. google-generativeai is the older
+# package and is not used; google-genai is the current one and reads
+# GEMINI_API_KEY, or the [gemini] table in .streamlit/secrets.toml.
+google-genai>=1.0
 pandas>=2.2,<3
 numpy>=1.26,<2
 xgboost==2.0.3

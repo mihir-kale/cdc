@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Streamlit secrets. secrets.toml.example is tracked; the real file is not.
+.streamlit/secrets.toml
+
 # Python
 __pycache__/
 *.py[cod]

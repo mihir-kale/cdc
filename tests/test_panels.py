@@ -21,6 +21,22 @@ except ModuleNotFoundError as exc:  # pragma: no cover
     # test_safety_labels.py.
     raise unittest.SkipTest(f"streamlit is not installed: {exc}") from exc
 
+# AppTest registers app.py in sys.modules under its own stem, so sys.modules
+# holds the *script* as "app" and shadows the backend package that app.py
+# imports from. The import block in app.py then falls into its except branch,
+# every function it binds becomes None, and the failure surfaces far away as
+# "TypeError: 'NoneType' object is not callable" from whichever panel ran first.
+#
+# Under `streamlit run` this cannot happen: the script runs as __main__, so the
+# name is free. It is purely a harness artefact, so it is fixed here rather
+# than in the product.
+#
+# Importing the package first puts the real one in sys.modules["app"], so the
+# script's import block finds the submodules it needs. unittest's alphabetical
+# discovery happened to do this via test_chat.py, which is why these tests
+# passed in a full run and failed all 20 of them when run alone.
+import app.chat.analysis  # noqa: F401  (import for the sys.modules side effect)
+
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
@@ -250,6 +266,21 @@ class TestAnalysisInvalidation(unittest.TestCase):
         t = text(at)
         self.assertNotIn("have changed since this was last read", t)
         self.assertIn("What this means", t)
+
+
+class TestAppRunsWithoutAKey(unittest.TestCase):
+    """The app must be fully functional with no key configured.
+
+    Absence of a key is the normal development state and the state before any
+    key is pasted in, so it is a supported path rather than a degraded one.
+    """
+
+    def test_a_lender_query_still_renders(self) -> None:
+        at = run("Uprova Credit, $300 at 391%")
+        t = text(at)
+        self.assertIn("Uprova Credit", t)
+        self.assertNotIn("None percentile", t)
+        self.assertNotIn("None" + "th percentile", t)
 
 
 if __name__ == "__main__":  # pragma: no cover

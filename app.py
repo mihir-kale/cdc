@@ -72,7 +72,12 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 try:
     from app.chat.analysis import build_analysis as _build_analysis
-    from app.chat.model import ScriptedModel as _ScriptedModel
+    from app.chat.model import (
+        DEFAULT_GEMINI_MODEL,
+        GeminiModel,
+        ScriptedModel as _ScriptedModel,
+        resolve_gemini_config,
+    )
     from app.chat.narrative import (
         NO_GRADE_DISCLOSURE,
         PEER_MARK_DISCLOSURE,
@@ -92,6 +97,9 @@ try:
     from app.payoff import estimate_payoff as _estimate_payoff
 except ImportError as _exc:  # pragma: no cover
     _ScriptedModel = None
+    GeminiModel = None
+    DEFAULT_GEMINI_MODEL = ""
+    resolve_gemini_config = lambda table=None: None  # noqa: E731
     _estimate_payoff = None
     _build_analysis = None
     _route = None
@@ -421,16 +429,63 @@ def _complaint_rows(label: dict) -> list[dict]:
     return rows
 
 
+# Gemini configuration, resolved once per process. The cache is here rather than
+# in the resolver because it is a Streamlit concern: one client per rerun.
+_GEMINI_MODEL: list = []
+
+
+def _gemini_config() -> dict | None:
+    """Gemini settings from Streamlit secrets, or the environment, or None.
+
+    Reads the ``[gemini]`` table in ``.streamlit/secrets.toml`` and hands it to
+    the resolver in ``app.chat.model``, which owns the decision and the
+    environment fallback. Returns None when no key is configured, and that None
+    is the signal the app runs its deterministic text -- not an error.
+    """
+    if _GEMINI_MODEL:
+        return _GEMINI_MODEL[0]
+
+    table = None
+    try:
+        table = st.secrets.get("gemini")
+    except Exception:
+        # No secrets.toml, or no [gemini] table. Not an error: the app runs its
+        # deterministic text when no key is configured.
+        table = None
+
+    cfg = resolve_gemini_config(table)
+    _GEMINI_MODEL.append(cfg)
+    return cfg
+
+
+def _gemini_model():
+    """A configured Gemini client, or None when no key is set.
+
+    Built lazily and cached, so a Streamlit rerun reuses one client. Any failure
+    here -- the SDK missing, a malformed key -- degrades to the deterministic
+    text rather than taking the app down.
+    """
+    cfg = _gemini_config()
+    if cfg is None or GeminiModel is None:
+        return None
+    try:
+        return GeminiModel(
+            api_key=cfg["api_key"],
+            model=cfg.get("model", DEFAULT_GEMINI_MODEL),
+        )
+    except Exception:
+        return None
+
+
 def _narrative_model():
     """The model used for the written interpretation, or None.
 
-    This is the one seam. No endpoint is provisioned, so it returns None and the
-    deterministic text is used. Wiring a provider means implementing ChatModel
-    and returning it here; nothing else in the app changes, and a reply that
-    fails the output guard still falls back to the deterministic text, so the
-    no-grade disclosure cannot be lost.
+    With a key configured this is the Gemini client; without one it is None and
+    the deterministic text is used, which is the behaviour from before the
+    client existed. A reply that fails the output guard still falls back to the
+    deterministic text, so the no-grade disclosure cannot be lost.
     """
-    return None
+    return _gemini_model()
 
 
 def _render_lender_heading(label: dict) -> None:
@@ -945,11 +1000,11 @@ def _fingerprint(**parts) -> str:
 def _analysis_model():
     """The model used for the per-panel analysis, or None.
 
-    The single seam, as with the lender narrative. No endpoint is configured, so
-    every panel shows its deterministic text, which is also what a rejected model
-    reply falls back to.
+    The same seam and the same client as the lender narrative. A panel whose
+    reply the guard rejects falls back to its deterministic text, so enabling
+    the model cannot remove a limit statement.
     """
-    return None
+    return _gemini_model()
 
 
 def _payoff_figures(offer):

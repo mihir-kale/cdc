@@ -8,11 +8,22 @@ half is supposed to catch the other.
 
 from __future__ import annotations
 
+import os
+from unittest import mock
+
 import unittest
 
 from app import label_store
 from app.chat import guard
-from app.chat.model import ScriptedModel
+from app.chat.analysis import build_analysis
+from app.chat.model import (
+    DEFAULT_GEMINI_MODEL,
+    GeminiModel,
+    ScriptedModel,
+    Turn,
+    gemini_key_from_env,
+    resolve_gemini_config,
+)
 from app.chat.narrative import (
     NO_GRADE_DISCLOSURE,
     build_facts,
@@ -214,3 +225,176 @@ class TestDisclosureGuardInteraction(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+class TestGeminiClient(unittest.TestCase):
+    """The Gemini client, exercised without the SDK or a network.
+
+    The contract that matters: a configured client is used, a broken one raises
+    so the call site falls back, and a reply the guard rejects still leaves the
+    deterministic text in place. That last one is the safety property, and it is
+    the reason a model can be switched on at all.
+    """
+
+    FACTS = {
+        "name": "Uprova Credit",
+        "n_complaints": 331,
+        "band_label": "Higher financial strain among surveyed households",
+        "percentile": 72,
+    }
+
+    class _StubModels:
+        def __init__(self, reply: str = "Uprova shows a higher share of "
+                                         "servicing complaints than peers.") -> None:
+            self.reply = reply
+            self.calls: list[dict] = []
+
+        def generate_content(self, **kwargs):
+            self.calls.append(kwargs)
+            text = self.reply(kwargs) if callable(self.reply) else self.reply
+            return type("R", (), {"text": text})()
+
+    class _StubClient:
+        def __init__(self, models):
+            self.models = models
+
+    def _model(self, reply="ok", **kw):
+        models = self._StubModels(reply)
+        return GeminiModel(
+            api_key="test-key",
+            client_factory=lambda: self._StubClient(models),
+            **kw,
+        ), models
+
+    def test_complete_returns_the_reply_text(self) -> None:
+        model, models = self._model("A short factual sentence.")
+        out = model.complete([Turn(role="user", content="explain")], [])
+        self.assertEqual(out, "A short factual sentence.")
+        self.assertEqual(len(models.calls), 1)
+
+    def test_turns_are_flattened_into_one_prompt(self) -> None:
+        model, models = self._model()
+        model.complete(
+            [Turn(role="system", content="SYSTEM"), Turn(role="user", content="USER")],
+            [],
+        )
+        prompt = models.calls[0]["contents"]
+        self.assertIn("SYSTEM", prompt)
+        self.assertIn("USER", prompt)
+        self.assertIn("[system]", prompt)
+
+    def test_empty_reply_is_empty_not_an_exception(self) -> None:
+        model, _ = self._model("")
+        self.assertEqual(model.complete([Turn(role="user", content="x")], []), "")
+
+    def test_client_failure_raises_so_the_caller_falls_back(self) -> None:
+        class Boom:
+            @property
+            def models(self):
+                raise RuntimeError("quota exhausted")
+
+        model = GeminiModel(api_key="k", client_factory=lambda: Boom())
+        with self.assertRaises(RuntimeError):
+            model.complete([Turn(role="user", content="x")], [])
+
+    def test_a_guarded_reply_leaves_the_deterministic_text_in_place(self) -> None:
+        # A model that grades a lender must not change what the panel shows.
+        model, _ = self._model("Uprova is a predatory lender with a risk score of 12.")
+        a = build_analysis("lender", self.LENDER_FACTS, model=model)
+        self.assertFalse(a.generated)
+        self.assertNotIn("predatory", a.text)
+        self.assertIn(a.limit, a.as_html())
+
+    def test_a_model_cannot_report_a_figure_it_was_not_given(self) -> None:
+        model, _ = self._model("The lender serves 4.2 million customers.")
+        a = build_analysis("lender", self.LENDER_FACTS, model=model)
+        self.assertFalse(a.generated)
+        self.assertNotIn("4.2 million", a.text)
+
+    LENDER_FACTS = {
+        "name": "Uprova Credit",
+        "n_complaints": 331,
+        "top_category": "Servicing & Payment Handling",
+        "top_share": 34.1,
+    }
+
+    def test_a_compliant_reply_is_used(self) -> None:
+        # A lender reply must carry the no-grade disclosure verbatim or the guard
+        # rejects it, which is why this test asserts on a reply that includes it
+        # rather than on any plausible-sounding sentence.
+        reply = (
+            "This lender's complaints lean towards servicing and payment "
+            "handling. " + NO_GRADE_DISCLOSURE
+        )
+        model, _ = self._model(reply)
+        a = build_analysis("lender", self.LENDER_FACTS, model=model)
+        self.assertTrue(a.generated, a.fallback_reason)
+        self.assertIn("servicing", a.text)
+        self.assertIn(a.limit, a.as_html())
+
+    def test_a_lender_reply_missing_the_disclosure_is_rejected(self) -> None:
+        # The same sentence without the disclosure is not enough.
+        model, _ = self._model(
+            "This lender's complaints lean towards servicing and payment handling."
+        )
+        a = build_analysis("lender", self.LENDER_FACTS, model=model)
+        self.assertFalse(a.generated)
+        self.assertEqual(a.fallback_reason, "missing_disclosure")
+
+
+class TestGeminiKeyResolution(unittest.TestCase):
+    def test_no_key_anywhere_is_none(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(gemini_key_from_env())
+
+    def test_google_api_key_wins_when_both_are_set(self) -> None:
+        # The SDK's own precedence rule, matched deliberately.
+        env = {"GEMINI_API_KEY": "a", "GOOGLE_API_KEY": "b"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(gemini_key_from_env(), "b")
+
+    def test_a_blank_key_is_not_a_key(self) -> None:
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "   "}, clear=True):
+            self.assertIsNone(gemini_key_from_env())
+
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()
+
+
+class TestGeminiConfigResolution(unittest.TestCase):
+    """The pure decision: is a key configured, and which settings apply.
+
+    Lives in chat.model rather than app.py because app.py is a Streamlit script
+    and cannot be imported here -- `import app` resolves to the backend package,
+    which is the name collision this repo already documents.
+    """
+
+    def test_no_secret_and_no_env_is_none(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(resolve_gemini_config(None))
+            self.assertIsNone(resolve_gemini_config({}))
+
+    def test_env_key_alone_is_enough(self) -> None:
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "from-env"}, clear=True):
+            cfg = resolve_gemini_config(None)
+        self.assertEqual(cfg["api_key"], "from-env")
+        self.assertEqual(cfg["model"], DEFAULT_GEMINI_MODEL)
+
+    def test_secret_key_wins_over_the_environment(self) -> None:
+        env = {"GEMINI_API_KEY": "from-env"}
+        table = {"api_key": "from-secret", "model": "gemini-x"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            cfg = resolve_gemini_config(table)
+        self.assertEqual(cfg["api_key"], "from-secret")
+        self.assertEqual(cfg["model"], "gemini-x")
+
+    def test_a_blank_secret_key_falls_back_to_the_environment(self) -> None:
+        env = {"GEMINI_API_KEY": "from-env"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            cfg = resolve_gemini_config({"api_key": "   "})
+        self.assertEqual(cfg["api_key"], "from-env")
+
+    def test_a_secret_model_without_a_key_is_not_enough(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(resolve_gemini_config({"model": "gemini-x"}))
