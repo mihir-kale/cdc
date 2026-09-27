@@ -369,8 +369,9 @@ def _render_comparison_table(lenders: list[dict], needle: str) -> None:
         "Sorted by name. Select a row to open its complaint profile.</p>"
     )
 
-    st.dataframe(
+    event = st.dataframe(
         frame.drop(columns=["id"]),
+        key=f"{LENDER_KEY}_table",
         hide_index=True,
         width="stretch",
         height=420,
@@ -393,9 +394,31 @@ def _render_comparison_table(lenders: list[dict], needle: str) -> None:
         " rate per customer, so it is not a quality measure and a larger lender"
         " will usually have more. Evidence available describes how much complaint"
         " data exists for a lender and nothing more. This list is for finding a"
-        " lender, not for ranking one.</p>"
+            " lender, not for ranking one.</p>"
     )
-    return frame
+    return frame, event
+
+
+def _selected_lender_id(event, frame) -> str | None:
+    """Map a table row click to a lender id.
+
+    The event is the value st.dataframe returns when on_select is set, not a
+    session_state entry: widget state is keyed on the widget, and reading a
+    hand-built session key is the way this silently stops working. Split out as a
+    pure function so the row-index mapping is testable without a click.
+    """
+    if event is None or frame is None or frame.empty:
+        return None
+    try:
+        rows = list(event.selection.rows)
+    except (AttributeError, TypeError):
+        return None
+    if not rows:
+        return None
+    i = rows[0]
+    if not isinstance(i, int) or not 0 <= i < len(frame):
+        return None
+    return str(frame.iloc[i]["id"])
 
 
 def _largest_category(label: dict) -> str:
@@ -976,7 +999,6 @@ with lender_tab:
     )
 
     lenders = lender_index()
-    picked_id = st.session_state.get(LENDER_KEY)
 
     # Search on the left, profile on the right, so a lender and the control that
     # produced it are on screen together and neither pushes the other down the
@@ -999,21 +1021,18 @@ with lender_tab:
                 '<p class="kyl-note" style="margin:.4rem 0 0">Showing all lenders.'
                 " Sort any column to compare them, or type to narrow.</p>"
             )
-        frame = _render_comparison_table(lenders, needle)
+        frame, event = _render_comparison_table(lenders, needle)
 
-        # Row selection drives the profile. Falls back to the session value so a
-        # selection survives a rerun that did not come from the table.
-        if frame is not None and not frame.empty:
-            event = st.session_state.get(f"{LENDER_KEY}_table")
-            rows = []
-            try:
-                rows = event.selection.rows  # type: ignore[union-attr]
-            except Exception:
-                rows = []
-            if rows:
-                st.session_state[LENDER_KEY] = str(frame.iloc[rows[0]]["id"])
+        # Row selection drives the profile. The click lands here on the rerun it
+        # triggered, so picked_id is re-read below rather than captured earlier:
+        # reading it before this block would render the previous lender for one
+        # run, making every selection appear to land late.
+        chosen = _selected_lender_id(event, frame)
+        if chosen is not None:
+            st.session_state[LENDER_KEY] = chosen
 
     with report_col:
+        picked_id = st.session_state.get(LENDER_KEY)
         if picked_id is None:
             section_card(
                 "<h3>No lender selected</h3>"
