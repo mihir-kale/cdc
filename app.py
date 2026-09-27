@@ -30,6 +30,7 @@ Presentation notes that matter when editing this file:
 
 from __future__ import annotations
 
+import hashlib
 import html
 import importlib.util
 import json
@@ -71,14 +72,34 @@ lender_index = _label_store.lender_index
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 try:
-    from app.chat.orchestrator import answer as _chat_answer
-    from app.chat.orchestrator import answer_offer as _answer_offer
+    from app.chat.analysis import build_analysis as _build_analysis
     from app.chat.model import ScriptedModel as _ScriptedModel
+    from app.chat.narrative import (
+        NO_GRADE_DISCLOSURE,
+        PEER_MARK_DISCLOSURE,
+        build_narrative,
+    )
+    from app.chat.tools import match_lenders_in_text as _match_lenders
+    from app.chat.router import (
+        EXAMPLES as _EXAMPLES,
+        PANEL_HOUSEHOLD as _PANEL_HOUSEHOLD,
+        PANEL_LENDER as _PANEL_LENDER,
+        PANEL_METHOD as _PANEL_METHOD,
+        PANEL_PAYOFF as _PANEL_PAYOFF,
+        PLACEHOLDER as _PLACEHOLDER,
+        route as _route,
+    )
     from app.payoff import estimate_payoff as _estimate_payoff
 except ImportError as _exc:  # pragma: no cover
-    _chat_answer = None
     _ScriptedModel = None
     _estimate_payoff = None
+    _build_analysis = None
+    _route = None
+    _match_lenders = None
+    _EXAMPLES: tuple = ()
+    _PLACEHOLDER = ""
+    _PANEL_LENDER = _PANEL_PAYOFF = _PANEL_HOUSEHOLD = _PANEL_METHOD = ""
+    build_narrative = None
     _CHAT_IMPORT_ERROR = _exc
 
 from kyl_theme import TOKENS, stylesheet  # noqa: E402
@@ -95,7 +116,11 @@ except (OSError, ValueError):  # pragma: no cover
 # Data and model constants. Unchanged from the previous version on purpose.
 # --------------------------------------------------------------------------
 
-SNAP_MODEL_PATH = "snap_xgboost.json"
+# Anchored to this file, not the working directory. A bare relative path only
+# resolved because the app happened to be launched from the repo root, and the
+# household panel now scores on every run rather than after a form submit, so a
+# wrong CWD made xgboost load nothing and abort the process rather than raise.
+SNAP_MODEL_PATH = str(Path(__file__).resolve().parent / "snap_xgboost.json")
 
 COMPARISON_TEXT = {
     "more": "More complaints than typical peers",
@@ -342,9 +367,7 @@ def _render_verdict_strip(label: dict) -> None:
         f'<p class="kyl-strip-head">{headline}</p>'
         f'<div class="kyl-strip" role="img" aria-label="{esc(plain)}">'
         f'{"".join(cells)}</div>'
-        '<p class="kyl-fine">A solid mark with a direction means the model can'
-        " separate this lender from its peers on that complaint type. A dash means"
-        " it cannot, and carries no direction.</p>"
+        f'<p class="kyl-fine">{esc(PEER_MARK_DISCLOSURE)}</p>'
     )
 
 
@@ -423,6 +446,9 @@ def _render_lender_picker(lenders: list[dict], needle: str, picked_id: str | Non
         " usually have more. This list is for finding a lender, not ranking"
         " one.</p>"
     )
+
+
+CHAT_KEY = "kyl_chat"
 
 
 def _household_profile() -> dict:
@@ -538,35 +564,16 @@ def _complaint_rows(label: dict) -> list[dict]:
     return rows
 
 
-def _watch_for_summary(label: dict, rows: list[dict]) -> str:
-    """Generate a concise watch-out summary from top complaint categories."""
-    scored = [r for r in rows if r["slug"] != "other" and r["complaints"] > 0]
-    if not scored:
-        return "No complaints on record for this lender."
+def _narrative_model():
+    """The model used for the written interpretation, or None.
 
-    top = scored[:2]
-    names = [r["label"].split(" &")[0].split(" /")[0].lower() for r in top]
-    subject = " and ".join(names)
-    verb = "makes up" if len(names) == 1 else "make up"
-
-    def _clause(text: str) -> str:
-        text = text.strip().rstrip(".")
-        if text.lower().startswith("check"):
-            text = text[5:].strip()
-        return text[:1].lower() + text[1:] if text else text
-
-    guidance = "; ".join(
-        _clause(r["what_to_inspect"]) for r in top if r["what_to_inspect"]
-    )
-    total = int(label["n_complaints"])
-
-    if total < 10:
-        suffix = "" if total == 1 else "s"
-        lead = f"With only {total} complaint{suffix}, treat this as an initial signal rather than a clear pattern."
-    else:
-        lead = f"{subject.capitalize()} {verb} the largest share of complaints for this lender."
-
-    return f"{lead} Worth inspecting: {guidance}." if guidance else lead
+    This is the one seam. No endpoint is provisioned, so it returns None and the
+    deterministic text is used. Wiring a provider means implementing ChatModel
+    and returning it here; nothing else in the app changes, and a reply that
+    fails the output guard still falls back to the deterministic text, so the
+    no-grade disclosure cannot be lost.
+    """
+    return None
 
 
 def _render_lender_report(label: dict) -> None:
@@ -640,23 +647,19 @@ def _render_lender_report(label: dict) -> None:
         )
     st.html(f'<ul class="kyl-crows">{"".join(bar_rows)}</ul>')
 
-    # --- what to pay attention to ---
+    # --- what to pay attention to, and how it compares ---
+    # Model-written where an endpoint is configured. No endpoint is configured
+    # yet, so this is the deterministic text, which is also the floor a rejected
+    # model reply falls back to.
+    _narrative = build_narrative(label, rows, model=_narrative_model())
     st.html(
         '<section class="kyl-card kyl-watch">'
         "<h3>What should I pay attention to?</h3>"
-        f'<p class="kyl-note">{esc(_watch_for_summary(label, rows))}</p>'
+        f"{_narrative.as_html()}"
         "</section>"
     )
 
-    # --- peer comparison summary, after the observed picture ---
     _render_verdict_strip(label)
-
-    st.html(
-        '<p class="kyl-fine">The marks above compare each complaint pattern with'
-        " modeled payday peers, and appear only where the available evidence"
-        " supports a comparison. They are not a grade, and there is no overall"
-        " score for a lender.</p>"
-    )
 
 
 def _complaint_detail(row: dict, taxonomy: dict) -> str:
@@ -715,20 +718,23 @@ def _complaint_detail(row: dict, taxonomy: dict) -> str:
     return "".join(parts)
 
 
-def _render_household_result(age, education, income, marital, metro, size, children):
-    data = {
-        "agecat": AGE_BANDS.index(age) + 1,
-        "PPEDUC": EDUCATION.index(education) + 1,
-        "PPINCIMP": INCOME.index(income) + 1,
-        "PPMARIT": MARITAL.index(marital) + 1,
-        "PPMSACAT": 1 if metro == "Yes" else 0,
-        "PPHHSIZE": size,
-        "total_children": children,
-        "child_ratio": children / size if size else 0.0,
-    }
-    frame = pd.DataFrame([data])
+
+def _household_facts(codes: dict) -> dict:
+    """Score a household profile without drawing anything.
+
+    Split from the render so the panel can decide what to show before it draws,
+    and so the analysis box beside it can be given the same figures.
+    """
+    """Household panel, read-only.
+
+    Takes survey codes straight from the query rather than from widgets. There is
+    no form here on purpose: the panel displays what the query established, so
+    a figure on screen is always a figure the user actually supplied.
+    """
+    frame = pd.DataFrame([dict(codes)])
     for name, categories in CATEGORICAL_CATEGORIES.items():
-        frame[name] = pd.Categorical(frame[name], categories=categories)
+        if name in frame.columns:
+            frame[name] = pd.Categorical(frame[name], categories=categories)
 
     booster = xgb.Booster()
     booster.load_model(SNAP_MODEL_PATH)
@@ -755,6 +761,18 @@ def _render_household_result(age, education, income, marital, metro, size, child
         )
 
     year = _HOUSEHOLD_CONTEXT.get("survey_year", "a national")
+    return {
+        "rate": pct,
+        "band": band,
+        "band_label": f"{band} than most surveyed households",
+        "reading": reading,
+        "year": year,
+    }
+
+
+def _render_household(f: dict) -> None:
+    """The household panel, read-only."""
+    pct, band, reading, year = f["rate"], f["band"], f["reading"], f["year"]
     section_card(
         '<p class="kyl-outcome-lab">Survey association</p>'
         f'<p class="kyl-outcome-val">{pct:.1f}%</p>'
@@ -762,7 +780,7 @@ def _render_household_result(age, education, income, marital, metro, size, child
         '<p class="kyl-note" style="margin-top:.7rem">A survey association from'
         f" {esc(year)}, not an eligibility determination and not a personal"
         " forecast. What that means, and what it does not, is in the Methodology"
-        " tab.</p>"
+        " panel.</p>"
     )
     st.html(
         '<p class="kyl-note">For an actual determination, eligibility is set by'
@@ -770,6 +788,7 @@ def _render_household_result(age, education, income, marital, metro, size, child
         f'<a href="{esc(SNAP_OFFICIAL)}" target="_blank" rel="noopener noreferrer">'
         "USDA Food and Nutrition Service &mdash; SNAP</a>.</p>"
     )
+
 
 def _render_methodology() -> None:
     """What FinePrint observes, what it calculates, and what it cannot.
@@ -989,303 +1008,474 @@ st.html(
     "</header>"
 )
 
-lender_tab, household_tab, calculator_tab, methodology_tab, chat_tab = st.tabs(
-    [
-        "Lender Complaint Profile",
-        "Household Financial Context",
-        "Loan Payoff Calculator",
-        "Methodology",
-        "Ask",
+EXAMPLES = _EXAMPLES
+PLACEHOLDER = _PLACEHOLDER
+PANEL_LENDER, PANEL_PAYOFF, PANEL_HOUSEHOLD, PANEL_METHOD = (
+    _PANEL_LENDER,
+    _PANEL_PAYOFF,
+    _PANEL_HOUSEHOLD,
+    _PANEL_METHOD,
+)
+
+
+def _route_query(text: str):
+    return _route(text)
+
+
+def _analysis_box(
+    panel: str, fingerprint: str, build, *, from_query: bool
+) -> None:
+    """One panel's analysis box, invalidated when its figures move.
+
+    Two ways in, one set of results: the query on the left, or the widgets in the
+    panel. Both feed the same figures, and the analysis is keyed to a fingerprint
+    of them. When a figure changes the stored analysis is thrown away and the box
+    asks to be regenerated, rather than continuing to describe numbers that are no
+    longer on screen. A stale analysis beside fresh figures is worse than none,
+    because it reads as a description of what is displayed.
+
+    ``from_query`` is what separates the two cases. When the panel's values are
+    still the ones the query supplied, the analysis is generated immediately:
+    that is the whole point of asking in natural language. Once a person has
+    changed something themselves, nothing is generated until they press the
+    button, because regenerating on every keystroke would narrate a half-typed
+    figure.
+    """
+    key = f"{CHAT_KEY}_{panel}_analysis"
+    fp_key = f"{key}_fp"
+
+    if st.session_state.get(fp_key) != fingerprint:
+        st.session_state.pop(key, None)
+        st.session_state[fp_key] = fingerprint
+        if from_query:
+            st.session_state[key] = build()
+
+    stored = st.session_state.get(key)
+    if stored is not None:
+        st.html(stored)
+        if st.button(
+            "Regenerate analysis",
+            key=f"{key}_regen",
+            help="Re-run the analysis against the figures currently shown.",
+        ):
+            st.session_state[key] = build()
+            st.rerun()
+        return
+
+    st.html(
+        '<div class="kyl-analysis kyl-analysis-stale">'
+        '<p class="kyl-analysis-head">What this means</p>'
+        '<p class="kyl-note">The figures above have changed since this was'
+        " last read, so the analysis was cleared rather than left describing the"
+        " old ones. Press regenerate to read the new ones.</p></div>"
+    )
+    if st.button("Regenerate analysis", key=f"{key}_regen2"):
+        st.session_state[key] = build()
+        st.rerun()
+
+
+def _fingerprint(**parts) -> str:
+    return "|".join(f"{k}={parts[k]!r}" for k in sorted(parts))
+
+
+def _analysis_model():
+    """The model used for the per-panel analysis, or None.
+
+    The single seam, as with the lender narrative. No endpoint is configured, so
+    every panel shows its deterministic text, which is also what a rejected model
+    reply falls back to.
+    """
+    return None
+
+
+def _payoff_figures(offer):
+    """Turn a parsed offer into the payoff figures, or None if it cannot."""
+    if offer.principal is None or offer.principal <= 0:
+        return None
+    apr = offer.apr if offer.apr is not None else 0.0
+    payment = offer.payment
+    if payment is None and offer.principal and offer.apr is not None:
+        # A single-payment structure has no periodic payment to read, so the
+        # cost is the finance charge over the term instead.
+        return {
+            "principal": offer.principal,
+            "apr": apr,
+            "term_days": offer.term_days,
+            "finance_charge": offer.finance_charge,
+            "total_repayment": offer.total_repayment,
+            "status": "single_payment",
+        }
+    if payment is None:
+        return None
+    est = _estimate_payoff(offer.principal, apr, float(payment))
+    return {
+        "principal": offer.principal,
+        "apr": apr,
+        "payment": float(payment),
+        "status": est.status,
+        "months": est.months,
+        "years": est.years,
+        "total_paid": est.total_paid,
+        "total_interest": est.total_interest,
+        "interest_share": est.interest_share,
+        "monthly_interest": est.monthly_interest,
+        "finance_charge": offer.finance_charge,
+        "total_repayment": offer.total_repayment,
+        "term_days": offer.term_days,
+    }
+
+
+def _render_payoff(p: dict) -> None:
+    """The payoff panel, read-only."""
+    if p.get("status") == "single_payment":
+        rows = [("Loan amount", f"${p['principal']:,.2f}")]
+        if p.get("finance_charge") is not None:
+            rows.append(("Finance charge", f"${p['finance_charge']:,.2f}"))
+        if p.get("total_repayment") is not None:
+            rows.append(("Total repayment", f"${p['total_repayment']:,.2f}"))
+        if p.get("term_days"):
+            rows.append(("Term", f"{p['term_days']} days"))
+        if p.get("apr") is not None:
+            rows.append(("Annual percentage rate", f"{p['apr']:g}%"))
+        st.html(
+            '<dl class="kyl-figures">'
+            + "".join(
+                f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in rows
+            )
+            + "</dl>"
+        )
+        if p.get("finance_charge") and p.get("principal"):
+            st.html(
+                '<p class="kyl-note">That is '
+                f"${p['finance_charge'] / p['principal'] * 100:,.2f} in charges"
+                f" for every $100 borrowed.</p>"
+            )
+        return
+
+    if p.get("status") == "interest_not_covered":
+        alert(
+            "danger",
+            "Debt trap warning:",
+            f"a ${p['payment']:,.2f} monthly payment does not cover the"
+            f" ${p['monthly_interest']:,.2f} of interest accruing each month at"
+            f" {p['apr']:g}%. The balance would grow rather than shrink.",
+        )
+        return
+    if p.get("status") != "ok" or p.get("months") is None:
+        st.html(
+            '<p class="kyl-note">Not enough of the offer could be read to work'
+            " out a payoff. An amount and a rate, or a payment, are needed.</p>"
+        )
+        return
+
+    rows = [
+        ("Loan amount", f"${p['principal']:,.2f}"),
+        ("Monthly payment", f"${p['payment']:,.2f}"),
+        ("Annual percentage rate", f"{p['apr']:g}%"),
+        ("Payoff time", f"{p['months']} months (~{p['years']} years)"),
+        ("Total repaid", f"${p['total_paid']:,.2f}"),
+        ("Total interest", f"${p['total_interest']:,.2f}"),
+        ("Interest share", f"{p['interest_share']:.1f}%"),
     ]
-)
-
-
-# ==========================================================================
-# 1. Lender Complaint Profile
-# ==========================================================================
-with lender_tab:
     st.html(
-        '<div style="margin:1.5rem 0 1rem">'
-        "<h2>Lender Complaint Profile</h2>"
+        '<dl class="kyl-figures">'
+        + "".join(f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in rows)
+        + "</dl>"
+    )
+
+
+def _lender_analysis(label: dict) -> str:
+    """The analysis box on the lender panel."""
+    rows = _complaint_rows(label)
+    top = next((r for r in rows if r["slug"] != "other" and r["complaints"] > 0), None)
+    facts = {
+        "name": label["name"],
+        "n_complaints": label["n_complaints"],
+        "evidence": label["evidence"],
+    }
+    if top is not None:
+        facts["top_category"] = top["label"]
+        facts["top_share"] = round(top["share"] * 100, 1)
+        facts["top_guidance"] = top.get("what_to_inspect", "")
+    return _build_analysis("lender", facts, model=_analysis_model()).as_html()
+
+
+def _household_analysis(f: dict) -> str:
+    facts = {"band_label": f["band_label"], "rate": f["rate"]}
+    return _build_analysis("household", facts, model=_analysis_model()).as_html()
+
+
+def _payoff_analysis(p: dict) -> str:
+    facts = {
+        k: p[k]
+        for k in (
+            "principal", "apr", "payment", "months", "total_paid",
+            "total_interest", "interest_share", "total_repayment",
+        )
+        if p.get(k) is not None
+    }
+    return _build_analysis("payoff", facts, model=_analysis_model()).as_html()
+
+
+# ==========================================================================
+# The interface: a query on the left, four read-only panels on the right
+# ==========================================================================
+# The query box decides which panels open. The panels display. The analysis box
+# beside each panel explains it. There is no free-form answer surface, so there
+# is nowhere for a model to volunteer advice about whether to take the loan, and
+# nothing on screen is a figure the user did not supply.
+_query_col, panels_col = st.columns([1, 2], gap="large")
+
+with _query_col:
+    st.html(
+        '<div style="margin:1.5rem 0 .6rem">'
+        "<h2>Ask about a lender or an offer</h2>"
+        f'<p class="kyl-note">{esc(PLACEHOLDER)}</p>'
         "</div>"
     )
 
-    lenders = lender_index()
-
-    # Search and selection on the left, the profile it produces on the right, so
-    # the control and its result are on screen together: picking a different
-    # lender does not require scrolling back up to find the search field, and the
-    # two halves can be compared at a glance. Streamlit stacks the columns itself
-    # below its own breakpoint, so this stays usable on a phone.
-    search_col, report_col = st.columns([1, 2], gap="large")
-
-    with search_col:
-        query = st.text_input(
-            "Search for a lender",
-            placeholder="Start typing a lender name\u2026",
-            key=f"{LENDER_KEY}_query",
-            live=True,
-            type="default",
+    with st.form(f"{CHAT_KEY}_form", border=False):
+        _query = st.text_area(
+            "Your question",
+            placeholder="Uprova Credit, $300 at 391% for 14 days",
+            height=120,
+            key=f"{CHAT_KEY}_query",
         )
-        needle = query.strip()
-        picked_id = st.session_state.get(LENDER_KEY)
-        _render_lender_picker(lenders, needle, picked_id)
-        # Re-read rather than reuse the value from above: the click is applied
-        # inside the picker, so a value captured before it is one interaction
-        # stale, and the profile would show the previous lender for a run.
-        picked_id = st.session_state.get(LENDER_KEY)
+        _submitted = st.form_submit_button("Show me", type="primary")
 
-    with report_col:
-        if picked_id is None:
-            section_card(
-                "<h3>No lender selected</h3>"
-                '<p class="kyl-note">Search for a lender to see its complaint'
-                " profile. What you see is what consumers reported to the CFPB"
-                " about that lender, alongside a comparison against modeled payday"
-                " peers. It is not a safety verdict.</p>"
+    if _submitted and _query.strip():
+        st.session_state[CHAT_KEY] = _query.strip()
+        st.rerun()
+
+    _query_now = st.session_state.get(CHAT_KEY, "")
+    _route = _route_query(_query_now) if _query_now else None
+
+    # Every panel widget's key carries this token, so a new query produces new
+    # widgets whose `value` is honoured. A keyed widget otherwise keeps its
+    # session value across reruns and ignores a changed index, which left the
+    # panels showing the previous query's figures and made every one of them look
+    # hand-edited, so no analysis was ever generated for a new query.
+    _TOKEN = hashlib.sha1((_query_now or "").encode("utf-8")).hexdigest()[:8]
+
+    if st.session_state.get(f"{CHAT_KEY}_seeded_query") != _query_now:
+        st.session_state[f"{CHAT_KEY}_seeded_query"] = _query_now
+        for _panel in ("lender", "household", "payoff"):
+            st.session_state.pop(f"{CHAT_KEY}_{_panel}_analysis", None)
+            # The fingerprint has to go too. Clearing only the analysis left a
+            # panel with a stored fingerprint and no analysis, and since the
+            # fingerprint matched, the regenerate branch never ran again: the
+            # panel was stuck on the cleared state for the rest of the session.
+            st.session_state.pop(f"{CHAT_KEY}_{_panel}_analysis_fp", None)
+
+    if _route is None:
+        # One st.html call. Splitting the wrapper leaves Streamlit to auto-close
+        # the unclosed div, which renders as a stray element under the button.
+        st.html(
+            '<div class="kyl-chat-empty">'
+            f'<p class="kyl-note">{esc(PLACEHOLDER)}</p>'
+            + "".join(
+                f'<p class="kyl-chat-ex"><b>{esc(_ex)}</b><br>'
+                f'<span class="kyl-fine">{esc(_desc)}</span></p>'
+                for _ex, _desc in EXAMPLES
             )
-        else:
-            label = get_lender(picked_id)
-            if label is None:
-                section_card("<h3>Lender not found</h3>")
-            else:
-                _render_lender_report(label)
-
-# ==========================================================================
-# 2. Household Financial Context
-# ==========================================================================
-with household_tab:
-    st.html(
-        '<div style="margin:1.5rem 0 1rem">'
-        "<h2>Household Financial Context</h2>"
-        '<p class="kyl-note">This model compares your selections with patterns in'
-        " survey data. It is not an official SNAP eligibility determination.</p>"
-        "</div>"
-    )
-
-    input_col, result_col = st.columns([1, 1], gap="large")
-
-    with input_col:
-        with st.form(HOUSEHOLD_FORM_KEY, border=False):
-            st.markdown("**Your household**")
-            age = st.selectbox("Age group", AGE_BANDS, index=1)
-            education = st.selectbox("Highest education", EDUCATION, index=3)
-            income = st.selectbox("Household income", INCOME, index=4)
-            marital = st.selectbox("Marital status", MARITAL, index=0)
-            metro = st.selectbox("Live in a city or metro area", METRO, index=0)
-            size = st.number_input(
-                "People in household", min_value=1, max_value=20, value=3, step=1
-            )
-            children = st.number_input(
-                "Children in the household", min_value=0, max_value=20, value=1, step=1
-            )
-
-            submitted = st.form_submit_button(
-                "Generate estimate", type="primary", width="stretch"
-            )
-
-    with result_col:
-        if not submitted:
-            section_card(
-                "<h3>Fill out your information to see your probability</h3>"
-            )
-        else:
-            _render_household_result(age, education, income, marital, metro, size, children)
-
-
-# ==========================================================================
-# 3. Loan Payoff Calculator
-# ==========================================================================
-with calculator_tab:
-    st.html(
-        '<div style="margin:1.5rem 0 1rem">'
-        "<h2>Loan Payoff Calculator</h2>"
-        '<p class="kyl-note">Estimated payoff time and total cost for a loan.</p>' 
-        "</div>"
-    )
-
-    loan_col, payoff_col = st.columns([1, 1], gap="large")
-
-    with loan_col:
-        principal = st.number_input(
-            "Loan amount",
-            min_value=1.0,
-            max_value=10_000_000.0,
-            value=1000.0,
-            step=50.0,
-            key="kyl_principal",
-            format="%.2f",
-        )
-        apr = st.number_input(
-            "Annual interest rate (APR)",
-            min_value=0.0,
-            max_value=500.0,
-            value=24.0,
-            step=0.5,
-            key="kyl_apr",
-            format="%.2f",
-        )
-        payment = st.number_input(
-            "Monthly payment",
-            min_value=0.01,
-            max_value=10_000_000.0,
-            value=50.0,
-            step=5.0,
-            key="kyl_payment",
-            format="%.2f",
-        )
-
-    # The arithmetic now lives in backend/app/payoff.py, shared with the
-    # assistant's estimate_payoff tool, so the number on screen and the number
-    # the assistant quotes cannot drift apart.
-    _estimate = _estimate_payoff(principal, apr, payment)
-    monthly_rate = _estimate.monthly_rate
-    monthly_interest = _estimate.monthly_interest
-
-    with loan_col:
-        # Always shown, so the number the payment must beat is never hidden.
-        if monthly_interest > 0:
-            st.html(
-                f'<p class="kyl-note" style="margin:.35rem 0 0">Minimum payment to'
-                f" cover this month\u2019s interest: <b>${monthly_interest:,.2f}</b></p>"
-            )
-        else:
-            st.html(
-                '<p class="kyl-note" style="margin:.35rem 0 0">This loan accrues no'
-                " monthly interest at an APR of 0%.</p>"
-            )
-
-    with payoff_col:
-        if _estimate.status == "invalid_payment":
-            alert("warning", "Check your payment.", "Enter a monthly payment above zero.")
-        elif _estimate.status == "interest_not_covered":
-            alert(
-                "danger",
-                "Debt trap warning:",
-                f"your ${payment:,.2f} monthly payment does not cover the"
-                f" ${monthly_interest:,.2f} in monthly interest. At this payment"
-                " level the balance will grow rather than be paid off.",
-            )
-        else:
-            m1, m2 = st.columns(2)
-            with m1:
-                st.metric(
-                    "Estimated payoff time",
-                    f"{_estimate.months} months",
-                    delta=f"~{_estimate.years} years",
-                )
-                st.metric("Total amount paid", f"${_estimate.total_paid:,.2f}")
-            with m2:
-                st.metric("Total interest", f"${_estimate.total_interest:,.2f}")
-                st.metric(
-                    "Interest as share of payments", f"{_estimate.interest_share:.1f}%"
-                )
-
-
-# --------------------------------------------------------------------------
-# Footer
-# --------------------------------------------------------------------------
-st.html(
-    '<footer class="kyl-foot">'
-    "Know Your Lender &middot; CFPB consumer complaint data and the CFPB National"
-    " Financial Well-Being Survey &middot; figures are peer-relative comparisons"
-    " and survey associations, not official determinations &middot; see the"
-    " Methodology tab.</footer>"
-)
-
-
-# ==========================================================================
-# 4. Methodology
-# ==========================================================================
-with methodology_tab:
-    _render_methodology()
-
-
-# ==========================================================================
-# 5. Ask
-# ==========================================================================
-CHAT_KEY = "kyl_chat"
-CHAT_MODEL_KEY = "kyl_chat_model"
-
-with chat_tab:
-    st.html(
-        '<div style="margin:1.5rem 0 1rem">'
-        "<h2>Check an offer</h2>"
-        '<p class="kyl-note">Paste a loan offer and you get three things: the'
-        " kinds of complaints people report about that lender, a full breakdown"
-        " of what you would be paying on those terms, and where households like"
-        " yours sit in national survey data.</p>"
-        "</div>"
-    )
-
-    if _chat_answer is None:  # pragma: no cover
-        st.error(
-            "The assistant could not be loaded, so it is unavailable. "
-            f"({_CHAT_IMPORT_ERROR})"
+            + "</div>"
         )
     else:
-        # A form, so the pasted text and the checkbox are submitted together.
-        # Outside a form the textarea's value is only sent on blur, which races
-        # the button click: paste an offer, click the button, and the click can
-        # arrive with an empty textarea and silently do nothing. Batching the
-        # values removes the ordering dependency entirely.
-        with st.form(f"{CHAT_KEY}_form", border=False):
-            offer_text = st.text_area(
-                "Paste the offer",
-                placeholder=(
-                    "Paste the loan offer here, however it is laid out. For"
-                    " example:\n\nCash Advance USA\nLoan Amount: $300.00\n"
-                    "APR: 391.00%\nFinance Charge: $76.00\n"
-                    "Total Repayment: $376.00\nTerm: 14 days"
+        st.html(
+            '<div class="kyl-chat-status">'
+            + "".join(f'<p class="kyl-note">{esc(n)}</p>' for n in _route.notes)
+            + '<p class="kyl-fine">Open panels: '
+            f"{esc(', '.join(_route.panels) if _route.panels else 'none')}.</p>"
+            "</div>"
+        )
+        if _query_now:
+            if st.button("Clear", key=f"{CHAT_KEY}_clear"):
+                st.session_state.pop(CHAT_KEY, None)
+                st.rerun()
+
+# --- panel bodies, computed once and rendered read-only ---
+_lender_label = None
+if _route is not None and _route.has_lender:
+    _lender_label = get_lender(_route.lender_id)
+
+_payoff = None
+if _route is not None and _route.offer.principal is not None:
+    _payoff = _payoff_figures(_route.offer)
+
+with panels_col:
+    # --- 1. Lender complaint profile ---
+    with st.expander(
+        "Lender Complaint Profile",
+        expanded=bool(_route and PANEL_LENDER in _route.panels),
+    ):
+        _manual_lender = st.text_input(
+            "Lender name",
+            value=_route.lender_name or "" if _route and _route.has_lender else "",
+            placeholder="Start typing a lender name",
+            key=f"{CHAT_KEY}_lender_manual_{_TOKEN}",
+        )
+        _from_query = bool(_route and _route.has_lender and _route.lender_name == _manual_lender)
+        _lender_id = _route.lender_id if (_route and _route.has_lender) else None
+        if not _from_query and _manual_lender.strip():
+            _hits = _match_lenders(_manual_lender)
+            if len(_hits) == 1:
+                _lender_id = _hits[0]["id"]
+            elif len(_hits) > 1:
+                _lender_id = None
+                st.html(
+                    '<p class="kyl-note">More than one lender matches that'
+                    f" name: {esc(', '.join(h['name'] for h in _hits))}.</p>"
+                )
+            else:
+                st.html(
+                    '<p class="kyl-note">No lender in the dataset matches'
+                    f" {esc(_manual_lender.strip())!r}.</p>"
+                )
+
+        _lender_label = get_lender(_lender_id) if _lender_id else None
+        if _lender_label is not None:
+            _render_lender_report(_lender_label)
+            _analysis_box(
+                "lender",
+                _fingerprint(lender=_lender_id, n=_lender_label["n_complaints"]),
+                lambda: _lender_analysis(_lender_label),
+                from_query=True,
+            )
+        else:
+            st.html(
+                '<p class="kyl-note">Name a lender above, or in your query, to'
+                " see what consumers reported about them to the CFPB.</p>"
+            )
+
+    # --- 2. Household financial context ---
+    with st.expander(
+        "Household Financial Context",
+        expanded=bool(_route and PANEL_HOUSEHOLD in _route.panels),
+    ):
+        # Deliberately not a form. Inside one, a change does not reach the script
+        # until it is submitted, so the analysis box could not clear the moment a
+        # figure moved, which is the behaviour this panel is required to have.
+        if True:
+            # What the query supplied, so "the user changed something" is a
+            # comparison rather than a guess.
+            _seed_age = (_route.household.get("age_band", 2) if _route else 2) - 1
+            _seed_edu = (_route.household.get("education", 3) if _route else 3) - 1
+            _seed_inc = (_route.household.get("household_income", 4) if _route else 4) - 1
+            _seed_mar = (_route.household.get("marital_status", 1) if _route else 1) - 1
+            _seed_met = 1 if (_route and _route.household.get("metro_area") == 1) else 0
+            _seed_size = int(_route.household.get("household_size", 3)) if _route else 3
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                _age = st.selectbox(
+                    "Age group", AGE_BANDS, index=max(0, _seed_age),
+                    key=f"{CHAT_KEY}_age_{_TOKEN}",
+                )
+                _edu = st.selectbox(
+                    "Highest education", EDUCATION, index=max(0, min(_seed_edu, len(EDUCATION) - 1)),
+                    key=f"{CHAT_KEY}_edu_{_TOKEN}",
+                )
+                _marital = st.selectbox(
+                    "Marital status", MARITAL, index=max(0, min(_seed_mar, len(MARITAL) - 1)),
+                    key=f"{CHAT_KEY}_marital_{_TOKEN}",
+                )
+            with _c2:
+                _income = st.selectbox(
+                    "Household income", INCOME,
+                    index=max(0, min(_seed_inc, len(INCOME) - 1)),
+                    key=f"{CHAT_KEY}_income_{_TOKEN}",
+                )
+                _metro = st.selectbox(
+                    "Live in a city or metro area", METRO, index=_seed_met,
+                    key=f"{CHAT_KEY}_metro_{_TOKEN}",
+                )
+                _size = st.number_input(
+                    "People in household", min_value=1, max_value=20,
+                    value=_seed_size, step=1, key=f"{CHAT_KEY}_size_{_TOKEN}",
+                )
+
+        _hcodes = {
+            "agecat": AGE_BANDS.index(_age) + 1,
+            "PPEDUC": EDUCATION.index(_edu) + 1,
+            "PPINCIMP": INCOME.index(_income) + 1,
+            "PPMARIT": MARITAL.index(_marital) + 1,
+            "PPMSACAT": 1 if _metro == "Yes" else 0,
+            "PPHHSIZE": int(_size),
+            "total_children": 0,
+            "child_ratio": 0.0,
+        }
+        _hfacts = _household_facts(_hcodes)
+        _render_household(_hfacts)
+        _analysis_box(
+            "household",
+            _fingerprint(**{k: v for k, v in sorted(_hcodes.items())}),
+            lambda: _household_analysis(_hfacts),
+            from_query=(
+                AGE_BANDS.index(_age) == max(0, _seed_age)
+                and EDUCATION.index(_edu) == max(0, min(_seed_edu, len(EDUCATION) - 1))
+                and INCOME.index(_income) == max(0, min(_seed_inc, len(INCOME) - 1))
+                and MARITAL.index(_marital) == max(0, min(_seed_mar, len(MARITAL) - 1))
+                # METRO.index, not the code: _seed_met is an index into the
+                # option list, and comparing it against the 0/1 code made the
+                # panel disagree with its own seed, so it never auto-generated.
+                and METRO.index(_metro) == _seed_met
+                and int(_size) == _seed_size
+            ),
+        )
+
+    # --- 3. Loan payoff ---
+    with st.expander(
+        "Loan Payoff Calculator",
+        expanded=bool(_route and PANEL_PAYOFF in _route.panels),
+    ):
+        # Not a form, for the same reason as the household panel above.
+        if True:
+            _seed_p = float(_route.offer.principal or 0.0) if _route else 0.0
+            _seed_a = float(_route.offer.apr or 0.0) if _route else 0.0
+            _seed_m = float(_route.offer.payment or 0.0) if _route else 0.0
+            _p1, _p2, _p3 = st.columns(3)
+            with _p1:
+                _principal = st.number_input(
+                    "Loan amount", min_value=0.0, max_value=10_000_000.0,
+                    value=_seed_p, step=50.0, format="%.2f", key=f"{CHAT_KEY}_principal_{_TOKEN}",
+                )
+            with _p2:
+                _apr = st.number_input(
+                    "APR %", min_value=0.0, max_value=5000.0,
+                    value=_seed_a, step=0.5, format="%.2f", key=f"{CHAT_KEY}_apr_{_TOKEN}",
+                )
+            with _p3:
+                _payment = st.number_input(
+                    "Monthly payment", min_value=0.0, max_value=10_000_000.0,
+                    value=_seed_m, step=5.0, format="%.2f", key=f"{CHAT_KEY}_payment_{_TOKEN}",
+                )
+
+        if _principal > 0 and (_apr > 0 or _payment > 0):
+            _po = _estimate_payoff(_principal, _apr, _payment)
+            _pay = {
+                "principal": _principal, "apr": _apr, "payment": _payment,
+                "status": _po.status, "months": _po.months, "years": _po.years,
+                "total_paid": _po.total_paid, "total_interest": _po.total_interest,
+                "interest_share": _po.interest_share,
+                "monthly_interest": _po.monthly_interest,
+            }
+            _render_payoff(_pay)
+            _analysis_box(
+                "payoff",
+                _fingerprint(principal=_principal, apr=_apr, payment=_payment),
+                lambda: _payoff_analysis(_pay),
+                from_query=(
+                    _principal == _seed_p and _apr == _seed_a and _payment == _seed_m
                 ),
-                height=180,
-                key=f"{CHAT_KEY}_offer",
             )
-            want_household = st.checkbox(
-                "Include the household survey section",
-                key=f"{CHAT_KEY}_household",
-                value=False,
-            )
-            submitted = st.form_submit_button(
-                "Check this offer", type="primary"
+        else:
+            st.html(
+                '<p class="kyl-note">Enter an amount and a rate above, or add'
+                " them to your query, to see what the loan would cost.</p>"
             )
 
-        if submitted and offer_text.strip():
-            # Loan figures and the household profile come from the interface,
-            # never from parsing the question.
-            profile: dict = {}
-            household = _household_profile()
-            if household:
-                profile.update(household)
-            for field, key in (
-                ("principal", "kyl_principal"),
-                ("apr", "kyl_apr"),
-                ("payment", "kyl_payment"),
-            ):
-                if key in st.session_state:
-                    profile[field] = float(st.session_state[key])
-
-            # No endpoint is provisioned, so no model is passed: the briefing
-            # itself is the reply. Everything in it comes from the same tools the
-            # other tabs use, so it is already correct; a model will only
-            # rephrase it later, behind the same guard.
-            reply = _answer_offer(
-                offer_text,
-                household_profile=profile,
-                include_household=want_household,
-            )
-            st.session_state[CHAT_KEY] = [
-                *st.session_state.get(CHAT_KEY, []),
-                {"question": "Pasted offer", "reply": reply},
-            ]
-            st.rerun()
-
-        for entry in st.session_state.get(CHAT_KEY, []):
-            _render_briefing(entry["reply"])
-
-        if st.session_state.get(CHAT_KEY):
-            st.button(
-                "Clear",
-                key=f"{CHAT_KEY}_clear",
-                on_click=lambda: st.session_state.pop(CHAT_KEY, None),
-            )
+    # --- 4. Methodology ---
+    with st.expander(
+        "Methodology",
+        expanded=bool(_route and PANEL_METHOD in _route.panels),
+    ):
+        _render_methodology()

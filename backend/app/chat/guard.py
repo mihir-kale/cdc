@@ -54,7 +54,12 @@ _VERDICT = re.compile(
     r"|\b(?:safe|trustworthy|legit(?:imate)?|honest|reliable)\s+"
     r"(?:lender|loan|company|choice)\b"
     r"|\b(?:lender|company)\s+is\s+(?:good|bad|fine|okay|ok)\b"
-    r"|\bverdict\b|\bwe\s+rate\b|\bgraded?\b",
+    r"|\bverdict\b"
+    r"|\b(?:i|we)\s+(?:would\s+)?rate\b"
+    r"|\bgraded?\b"
+    # A letter grade is a grade whatever it is wrapped in.
+    r"|\b(?:grade|rated|rating)\s+[A-F]\b"
+    r"|\b[A-F]\s*-\s*grade\b",
     re.I,
 )
 
@@ -95,6 +100,39 @@ _SCORE_CLAIM = re.compile(
     r"(?:loan|offer|deal)\b"
     r"|\b(?:a|an)\s+(?:risky|dangerous|unsafe)\s+(?:loan|one|idea)\b",
     re.I,
+)
+
+# Unsolicited advice. The other checks stop the model grading a lender or
+# inventing a number; none of them stopped it telling someone what to do. On a
+# page whose entire purpose is a person deciding whether to take a loan, that is
+# the failure that matters most, so it is checked explicitly.
+_ADVICE = re.compile(
+    r"\byou\s+(?:should|shouldn't|should\s+not|must|need\s+to|ought\s+to|"
+    r"may\s+want\s+to|have\s+to)\s+(?:\w+\s+){0,3}?"
+    r"(?:borrow|take|apply|sign|accept|get|choose|pick|use|avoid|repay|"
+    r"refinance)\b"
+    r"|\b(?:i|we)\s+(?:would\s+)?recommend\b"
+    r"|\b(?:this|that|the)\s+(?:(?:loan|offer|deal)\s+)?is\s+(?:a\s+)?"
+    r"(?:good|decent|fair|bad|poor|great|bad\s+value)\s+"
+    r"(?:deal|one|choice|value|option)\b"
+    r"|\byou(?:'| a)?re\s+(?:better|worse)\s+off\b"
+    # "you will be better off", not only "you're better off"
+    r"|\byou\s+will\s+be\s+(?:better|worse)\s+off\b"
+    r"|\byou(?:'| a)?re\s+(?:better|worse)\s+off\s+(?:off\s+)?"
+    r"(?:if|with|by|doing|taking|borrowing)\b"
+    r"|\bi(?:'d|\s+would)\s+(?:suggest|advise)\b"
+    r"|\bworth\s+(?:taking|signing|borrowing)\b"
+    r"|\bconsider\s+(?:taking|borrowing|applying)\b"
+    r"|\bavoid\s+this\s+lender\b"
+    r"|\bgo\s+with\s+(?:this|that)\s+(?:lender|loan)\b",
+    re.I,
+)
+
+ADVICE_REFUSAL = (
+    "I am not going to tell you whether to take this loan. What I can do is "
+    "show you what people reported about this lender, what these terms cost, "
+    "and where households with a profile like yours sit in survey data. Those "
+    "are three separate facts, and the decision is yours."
 )
 
 SCORE_REFUSAL = (
@@ -148,6 +186,31 @@ class GuardResult:
     unsupported: tuple[str, ...] = field(default=())
 
 
+# The disclosure the product is required to make, in its ordinary phrasings. These
+# are negations: "this is not a grade" contains the word "grade", and "there is no
+# overall score" contains "overall score". A model asked to state the disclaimer
+# therefore trips the very patterns meant to catch a grade being handed out.
+#
+# These spans are removed before the verdict and ranking checks run, and only
+# these. It is not a general negation-blind exemption: "Uprova is not safe" does
+# not match here and is still caught, because the point of the pattern is that a
+# bare superlative is a claim even when it is a hedged one.
+_NEGATED_DISCLOSURE = re.compile(
+    r"\b(?:is\s+not|are\s+not|was\s+not|were\s+not|not\s+a|not\s+an|no|"
+    r"never|without)\s+(?:an?\s+)?"
+    r"(?:overall\s+|final\s+|lender\s+)?"
+    r"(?:grade|score|rating|verdict|grading|rank(?:ing)?s?)\b"
+    r"|\bthere\s+is\s+no\s+(?:overall\s+)?(?:score|grade|rating|verdict)\b"
+    r"|\bnothing\s+here\s+is\s+a\s+(?:grade|score|rating|verdict)\b",
+    re.I,
+)
+
+
+def strip_negated_disclosures(text: str) -> str:
+    """Remove disclaimer phrasing before the ranking and verdict checks."""
+    return _NEGATED_DISCLOSURE.sub(" ", text or "")
+
+
 def _numbers(text: str) -> set[str]:
     """Normalise figures so 1,234 and 1234.0 compare equal."""
     out: set[str] = set()
@@ -174,6 +237,7 @@ def check_reply(
     *,
     allow_unsupported: bool = False,
     sanctioned_numbers: list[float] | None = None,
+    require_no_grade_disclosure: bool = False,
 ) -> GuardResult:
     """Check one assistant reply against what the tools actually returned.
 
@@ -183,6 +247,14 @@ def check_reply(
 
     ``allow_unsupported`` exists for tests that deliberately inject a bad figure
     and need the number check to be the thing that fires.
+
+    ``require_no_grade_disclosure`` checks presence rather than absence. The
+    other checks can only reject a claim that is made; none of them can notice a
+    required statement that was left out. On a page where the model writes the
+    disclosure, a model that simply omits it would otherwise pass, and the
+    no-grade guarantee would quietly disappear. So the guarantee is enforced in
+    both directions: forbidden claims are rejected, and the disclosure must be
+    present.
     """
     text = reply or ""
     if text in SYSTEM_TEXTS:
@@ -191,9 +263,14 @@ def check_reply(
 
     if _SCORE_CLAIM.search(text):
         violations.append("score_claim")
-    if _RANKING.search(text):
+    if _ADVICE.search(text):
+        violations.append("advice")
+    # Checked against the text with disclaimer phrasing removed, so stating the
+    # no-grade disclosure is not treated as asserting a grade.
+    scannable = strip_negated_disclosures(text)
+    if _RANKING.search(scannable):
         violations.append("ranking_language")
-    if _VERDICT.search(text):
+    if _VERDICT.search(scannable):
         violations.append("verdict_language")
 
     unsupported: list[str] = []
@@ -211,7 +288,21 @@ def check_reply(
         for n in sorted(_numbers(text) - allowed, key=lambda s: -len(s)):
             unsupported.append(n)
 
+    if require_no_grade_disclosure and not _NEGATED_DISCLOSURE.search(text):
+        violations.append("missing_disclosure")
+
     if violations:
+        if "advice" in violations:
+            return GuardResult(ADVICE_REFUSAL, False, tuple(violations), ())
+        if "missing_disclosure" in violations:
+            return GuardResult(
+                "This passage did not state that the comparison is not a grade, "
+                "so it is not shown. The lender page always carries that "
+                "statement.",
+                False,
+                tuple(violations),
+                (),
+            )
         if "score_claim" in violations:
             return GuardResult(SCORE_REFUSAL, False, tuple(violations), ())
         if "ranking_language" in violations:
@@ -234,5 +325,5 @@ def check_reply(
 # Registered here rather than left to the caller, so the guard is correct on its
 # own terms the moment it is imported.
 register_system_texts(
-    {RANKING_REFUSAL, VERDICT_REFUSAL, SCORE_REFUSAL}
+    {RANKING_REFUSAL, VERDICT_REFUSAL, SCORE_REFUSAL, ADVICE_REFUSAL}
 )

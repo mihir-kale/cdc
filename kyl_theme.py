@@ -350,6 +350,44 @@ padding: .4rem 0; border-bottom: 1px solid{t['border']};
   text-decoration-color: {t['border_strong']};
 }}
 
+/* --------------------------------------- the query column and the panels */
+/* Two panels: a query on the left, read-only tool panels on the right. The
+   query column is a control surface, so it is visually distinct from the
+   results and does not look like another output. */
+.kyl-chat-status {{
+  border-left: 3px solid {t['primary']};
+  padding: .1rem 0 .1rem .7rem; margin: .2rem 0 .6rem;
+}}
+.kyl-chat-empty {{
+  border: 1px dashed {t['border_strong']}; border-radius: {t['radius']};
+  padding: .8rem .9rem; margin-top: .4rem;
+}}
+.kyl-chat-ex {{ margin: .55rem 0 0; font-size: .9rem; }}
+/* Key/value figures in the payoff panel. */
+.kyl-figures {{
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: .3rem .9rem; margin: .2rem 0 .6rem;
+  font-variant-numeric: tabular-nums;
+}}
+.kyl-figures dt {{ color: {t['muted']}; font-size: .9rem; }}
+.kyl-figures dd {{ margin: 0; text-align: right; font-weight: 600; }}
+/* The analysis box that sits under each panel's figures. */
+.kyl-analysis {{
+  border: 1px solid {t['border']}; border-left: 3px solid {t['primary']};
+  border-radius: {t['radius_sm']}; background: {t['primary_soft']};
+  padding: .7rem .85rem; margin: .7rem 0 .2rem;
+}}
+.kyl-analysis-head {{
+  font-size: .75rem; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: {t['primary']}; margin: 0 0 .3rem;
+}}
+/* Cleared because the figures changed. Amber, not red: the data is fine, the
+   analysis is simply out of date. */
+.kyl-analysis-stale {{
+  background: {t['warning_soft']}; border-left-color: {t['warning']};
+}}
+.kyl-analysis-stale .kyl-analysis-head {{ color: {t['warning']}; }}
+
 /* ------------------------------------------------- the offer briefing (Ask) */
 .kyl-chat {{
   border: 1px solid {t['border']}; border-radius: {t['radius']};
@@ -502,11 +540,6 @@ text-transform: uppercase; color:{t['muted']}; margin-bottom: .2rem; }}
 .kyl-list li{{ font-size: .875rem; line-height: 1.6; color: {t['muted']}; margin-bottom: .2rem; }}
 
 .kyl-fine{{ font-size: .78rem; color: {t['muted']}; line-height: 1.6; }}
-.kyl-foot{{
-border-top: 1px solid{t['border']}; margin-top: 2rem; padding-top: 1.1rem;
-font-size: .8rem; color:{t['muted']}; line-height: 1.65;
-}}
-
 /* Respect reduced-motion: strip every transition and animation. */
 @media (prefers-reduced-motion: reduce) {{
 *, *::before, *::after{{

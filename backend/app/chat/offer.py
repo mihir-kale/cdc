@@ -214,6 +214,74 @@ def _derive(offer: Offer) -> None:
         offer.missing.insert(0, "the loan amount")
 
 
+# Conversational phrasing, for when the query is a sentence rather than a
+# pasted document: "$300 at 391% for 14 days", "1000 dollars, 24% apr, 12
+# months". These run only for fields the labelled patterns did not find, so a
+# real offer document still takes precedence over a loose reading of it.
+_C_MONEY = r"\$?\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)"
+# Ordered strongest first. "for" is deliberately absent from the keyword list:
+# in "for 14 days" it precedes the term, and an earlier version captured 14 as the
+# loan amount. A dollar sign is the most reliable signal, so it is tried first.
+_C_DOLLARS = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)")
+_C_DOLLARS_WORD = re.compile(r"\b(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*dollars?\b", re.I)
+_C_PRINCIPAL_KW = re.compile(
+    r"\b(?:amount|principal|advance|borrowing|loan(?:ing)?|finance)\s*"
+    r"(?:borrowed|amount|of|for)?\s*[:\-]?\s*(?:of\s*)?"
+    r"\$?\s?(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)",
+    re.I,
+)
+_C_APR = re.compile(
+    r"(?:\bat\s+|rate\s+of\s+|apr\s+(?:of\s+)?|interest\s+(?:rate\s+)?(?:of\s+)?)"
+    r"(\d+(?:\.\d+)?)\s*%",
+    re.I,
+)
+_C_APR_BARE = re.compile(r"(?<![\w.])(\d{2,4}(?:\.\d+)?)\s*%")
+_C_TERM = re.compile(
+    r"\bfor\s+(\d{1,4})\s*(days?|weeks?|months?)\b"
+    r"|\bover\s+(\d{1,4})\s*(days?|weeks?|months?)\b",
+    re.I,
+)
+
+
+def _conversational(offer: Offer) -> None:
+    """Fill gaps from sentence-shaped phrasing. Never overwrites."""
+    text = offer.raw_text
+    if not text:
+        return
+
+    if offer.principal is None:
+        for pattern in (_C_DOLLARS, _C_DOLLARS_WORD, _C_PRINCIPAL_KW):
+            m = pattern.search(text)
+            if not m:
+                continue
+            value = _num(m.group(1))
+            if 0 < value <= 1_000_000:
+                offer.principal = value
+                break
+
+    if offer.apr is None:
+        m = _C_APR.search(text)
+        if not m:
+            # A lone large percentage next to a money amount is the rate.
+            m2 = _C_APR_BARE.search(text)
+            if m2 and 1.0 < float(m2.group(1)) <= 5000:
+                m = m2
+        if m:
+            offer.apr = _num(m.group(1))
+
+    if offer.term_days is None and offer.term_months is None:
+        m = _C_TERM.search(text)
+        if m:
+            n = int(m.group(1) or m.group(3))
+            unit = (m.group(2) or m.group(4) or "days").lower()
+            if unit.startswith("month"):
+                offer.term_months = n
+            elif unit.startswith("week"):
+                offer.term_days = n * 7
+            else:
+                offer.term_days = n
+
+
 def parse_offer(text: str) -> Offer:
     """Read whatever a pasted offer actually contains.
 
@@ -245,6 +313,7 @@ def parse_offer(text: str) -> Offer:
         if m:
             offer.term_months = int(m.group(1))
 
+    _conversational(offer)
     _derive(offer)
     return offer
 
