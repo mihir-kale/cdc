@@ -249,27 +249,15 @@ def build_payload(
         "schema_version": 1,
         "method": "Method C (empirical-Bayes Beta-Binomial posterior, peer-referenced)",
         "methodology": {
-            "direction": (
-                "Higher scores indicate a more favorable CFPB complaint profile "
-                "relative to modeled payday-loan peers."
-            ),
+            "direction": "Higher scores reflect fewer complaints relative to payday-loan peers.",
             "summary": (
-                "FinePrint analyzes CFPB consumer complaints for payday loans. "
-                "Each dimension compares the pattern of complaints associated "
-                "with a lender against modeled payday-loan peers. Statistical "
-                "shrinkage reduces extreme estimates when relatively little "
-                "complaint data is available."
+                "Compares a lender's CFPB complaint patterns against payday-loan peers. "
+                "Applies statistical shrinkage to account for low complaint volumes."
             ),
             "caveats": [
-                "CFPB complaints are consumer-submitted reports and do not "
-                "necessarily indicate verified wrongdoing.",
-                "Complaint volume is used to communicate evidence strength; a "
-                "lender is not penalized simply for having more complaints "
-                "because FinePrint does not currently have lender-level customer "
-                "or loan-volume denominators.",
-                "A score describes the volume of consumer complaints relative to "
-                "modeled peers. It is not the probability that a borrower will "
-                "experience harm.",
+                "CFPB complaints are unverified consumer reports.",
+                "Scores reflect complaint patterns, not total volume or borrower risk.",
+                "Lack of lender market-share data prevents computing per-customer rates.",
             ],
             "evidence_bands": [
                 {"min_complaints": low, "label": label}
@@ -287,11 +275,8 @@ def build_payload(
             taxonomy if taxonomy is not None else load_taxonomy()
         )
         payload["complaint_share_note"] = (
-            "Shares are of the CFPB payday-loan complaints associated with a "
-            "lender in this dataset. They are not a rate per customer: this "
-            "dataset has no lender-level count of customers, loans or "
-            "transaction volume, so no customer-level complaint rate can be "
-            "computed."
+            "Shares show complaint distribution within this dataset, "
+            "not per-customer rates (lender size data is unavailable)."
         )
     return payload
 

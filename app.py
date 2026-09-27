@@ -383,14 +383,10 @@ def _render_comparison_table(lenders: list[dict], needle: str) -> None:
             ),
         },
     )
-    st.html(
-        '<p class="kyl-fine">Sorted by name, not by any measure of quality.'
-        " Complaints in dataset is a count of consumer-submitted reports, not a"
-        " rate per customer, so it is not a quality measure and a larger lender"
-        " will usually have more. Evidence available describes how much complaint"
-        " data exists for a lender and nothing more. This list is for finding a"
-            " lender, not for ranking one.</p>"
-    )
+st.html(
+    '<p class="kyl-fine"> Sorted by name, not by any measure of quality.'
+    '</p>'
+)
     return frame, event
 
 
@@ -1074,13 +1070,7 @@ with household_tab:
     with result_col:
         if not submitted:
             section_card(
-                "<h3>What you will see</h3>"
-                '<p class="kyl-note">Choose a household on the left and select'
-                " <b>Generate estimate</b>. You will get a short plain-language"
-                " reading of how a household with these characteristics sat in the"
-                " CFPB National Financial Well-Being Survey, what that does and does"
-                " not tell you, and which inputs carry the most weight in the"
-                " model.</p>"
+                "<h3>Fill out your information to see your probability</h3>"
             )
         else:
             _render_household_result(age, education, income, marital, metro, size, children)
