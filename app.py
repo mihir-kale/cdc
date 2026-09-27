@@ -917,7 +917,7 @@ st.html(
     '<header class="kyl-header">'
     '<div class="kyl-header-inner">'
     '<span class="kyl-header-mark">'
-    '<img src="app/static/kyl-logo.png" alt="" width="52" height="42">'
+    '<img src="app/static/kyl-logo.png" alt="" width="52" height="41">'
     "</span>"
     '<span class="kyl-header-text">'
     '<span class="kyl-mark">Know Your Loan</span>'

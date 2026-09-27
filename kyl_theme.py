@@ -313,11 +313,14 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
    wordmark lines up with the content below rather than hugging the window edge.
 
    The mark sits directly on the band with no tile behind it. static/kyl-logo.png
-   is new.png, which arrives already cropped to its content at 287x234 with its
-   background genuinely removed -- the corners are (0,0,0,0) and 38% of the
+   is new.png, which arrives already cropped to its content and with its
+   background genuinely removed -- the corners are (0,0,0,0) and 63% of the
    pixels are fully transparent -- so a white plate would only be covering
-   something that is not there. The shark is also drawn in pale blue and white,
-   which clear the deep teal at 3.6:1 and 5.4:1, so it stands on its own. */
+   something that is not there. Measured against the band, its pale blue body
+   clears at 4.3:1 and its white at 5.4:1, so it stands on its own. One accent
+   tone inside it sits at 1.95:1; it is a small minority of the pixels and the
+   silhouette does not depend on it, but it is not a colour to rely on for
+   legibility. */
 .kyl-header {{
   /* Break out of the centred 1120px container to the full viewport width. */
   margin-left: calc(50% - 50vw);
