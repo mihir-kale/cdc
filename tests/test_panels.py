@@ -9,10 +9,19 @@ covers the interaction.
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
-from streamlit.testing.v1 import AppTest
+try:
+    from streamlit.testing.v1 import AppTest
+except ModuleNotFoundError as exc:  # pragma: no cover
+    # Streamlit is deliberately absent from the backend's test requirements, the
+    # same way the app's runtime deps are kept out of backend/requirements.txt.
+    # The backend job therefore skips this file, and the checks run where
+    # Streamlit is installed. Same convention as the processed-feature skips in
+    # test_safety_labels.py.
+    raise unittest.SkipTest(f"streamlit is not installed: {exc}") from exc
 
-APP = "/Users/mihirkale/cdc/app.py"
+APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
 def run(query: str | None = None) -> AppTest:
