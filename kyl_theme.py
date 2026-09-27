@@ -58,15 +58,6 @@ TOKENS = {
 # Five distinguishable hues at similar lightness, and the "other" remainder is
 # deliberately neutral grey so it recedes -- it is the part of the data these
 # five types do not cover, and it should not compete for attention.
-CATEGORY_STYLE = {
-    "withdrawal": "#4C6EF5",  # blue
-    "fees": "#F59F00",  # amber
-    "unauthorized": "#15AABF",  # cyan
-    "credit_rep": "#9C36B5",  # violet
-    "servicing": "#E64980",  # pink
-    "other": "#98A2B3",  # neutral grey for the uncovered remainder
-}
-
 def stylesheet() -> str:
     t = TOKENS
     return f"""

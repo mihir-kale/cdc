@@ -66,7 +66,7 @@ _spec.loader.exec_module(_label_store)
 get_lender = _label_store.get_lender
 lender_index = _label_store.lender_index
 
-from kyl_theme import CATEGORY_STYLE, TOKENS, stylesheet  # noqa: E402
+from kyl_theme import TOKENS, stylesheet  # noqa: E402
 
 dataset_summary = _label_store.dataset_summary
 
@@ -333,104 +333,81 @@ def _render_verdict_strip(label: dict) -> None:
     )
 
 
-def _render_comparison_table(lenders: list[dict], needle: str) -> None:
-    """Every lender, sortable, click to select. This list exists to FIND a lender.
+def _lender_matches(lenders: list[dict], needle: str) -> list[dict]:
+    """Lenders whose name contains the search text, best fragment first.
 
-    It is deliberately not a ranking. The default order is alphabetical, and the
-    column that could be mistaken for a quality score has been replaced with the
-    lender's largest observed complaint category: how separable a lender is says
-    how much complaint data it has, not whether it is better or worse.
+    A prefix match is a better answer than a match buried mid-name, so prefix hits
+    sort ahead of the rest. Within each group the name is sorted alphabetically, so
+    the list is never a ranking and never looks like one.
     """
-    rows = []
-    for row in lenders:
-        full = get_lender(row["id"])
-        if full is None:  # pragma: no cover
-            continue
-        rows.append(
-            {
-                "id": row["id"],
-                "Lender": row["name"],
-                "Complaints in dataset": row["n_complaints"],
-                "Evidence available": row["evidence"],
-                "Largest reported category": _largest_category(full),
-            }
+    if not needle:
+        return []
+    lowered = needle.lower()
+    hits = [r for r in lenders if lowered in r["name"].lower()]
+    hits.sort(key=lambda r: (not r["name"].lower().startswith(lowered), r["name"]))
+    return hits
+
+
+def _render_lender_picker(lenders: list[dict], needle: str, picked_id: str | None) -> None:
+    """A search field and a short list of lenders to click.
+
+    This is a lookup control, not a table of results. There is no grid, no
+    sortable column and no checkbox: a grid of rows with checkboxes asks the user
+    to read a comparison they are not here for, and a sortable numeric column is
+    one click away from looking like a ranking. A lender's name and complaint count
+    are what someone actually scans for, so those are the whole button.
+    """
+    if not needle:
+        st.html(
+            '<p class="kyl-note" style="margin:.5rem 0 0">Type a lender name to'
+            " begin. There is no browse list, because a list of 482 lenders is not"
+            " a way to find one.</p>"
         )
+        return
 
-    frame = pd.DataFrame(rows)
-    if needle:
-        frame = frame[frame["Lender"].str.contains(needle, case=False, na=False)]
-    # Alphabetical by default. The list is a lookup, not a leaderboard.
-    frame = frame.sort_values("Lender").reset_index(drop=True)
+    matches = _lender_matches(lenders, needle)
+    if not matches:
+        st.html(
+            f'<p class="kyl-note" style="margin:.5rem 0 0">No lender matches'
+            f" <b>{esc(needle)}</b>. Try a shorter fragment of the name.</p>"
+        )
+        return
 
-    matched = f' matching "{esc(needle)}"' if needle else ""
+    shown = matches[:MAX_MATCHES]
     st.html(
-        '<p class="kyl-note" style="margin:.6rem 0 .3rem">'
-        f"{len(frame):,} of {len(lenders):,} lenders{matched}. "
-        "Sorted by name. Select a row to open its complaint profile.</p>"
+        '<p class="kyl-note" style="margin:.6rem 0 .35rem">'
+        + (
+            f"{len(matches):,} match{'es' if len(matches) != 1 else ''},"
+            f" showing {len(shown)} &mdash; pick one:"
+            if len(matches) > len(shown)
+            else f"{len(matches):,} match"
+            f"{'es' if len(matches) != 1 else ''} &mdash; pick one:"
+        )
+        + "</p>"
     )
+    for row in shown:
+        if st.button(
+            f"{row['name']}&nbsp;&nbsp;&middot;&nbsp;&nbsp;"
+            f"{plural(row['n_complaints'], 'complaint')}",
+            key=f"{LENDER_KEY}_hit_{row['id']}",
+            width="stretch",
+            type="primary" if row["id"] == picked_id else "secondary",
+            help=f"{row['evidence']} in the dataset",
+        ):
+            # No st.rerun() here. A button click already triggers a run, and
+            # calling rerun() from inside the render loop throws away the rest of
+            # the page mid-draw. The assignment lands in session state, the report
+            # below reads it back, and the highlight appears on the next run that
+            # the click itself causes.
+            st.session_state[LENDER_KEY] = row["id"]
 
-    event = st.dataframe(
-        frame.drop(columns=["id"]),
-        key=f"{LENDER_KEY}_table",
-        hide_index=True,
-        width="stretch",
-        height=420,
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "Lender": st.column_config.TextColumn("Lender", width="stretch"),
-            "Complaints in dataset": st.column_config.NumberColumn(
-                "Complaints in dataset", format="%d"
-            ),
-            "Evidence available": st.column_config.TextColumn("Evidence available"),
-            "Largest reported category": st.column_config.TextColumn(
-                "Largest reported category"
-            ),
-        },
-    )
     st.html(
-        '<p class="kyl-fine">Sorted by name, not by any measure of quality.'
-        " Complaints in dataset is a count of consumer-submitted reports, not a"
-        " rate per customer, so it is not a quality measure and a larger lender"
-        " will usually have more. Evidence available describes how much complaint"
-        " data exists for a lender and nothing more. This list is for finding a"
-            " lender, not for ranking one.</p>"
+        '<p class="kyl-fine">Listed by name, not by any measure of quality. The'
+        " complaint count is consumer-submitted reports in our dataset, not a rate"
+        " per customer, so it is not a quality measure and a larger lender will"
+        " usually have more. This list is for finding a lender, not ranking"
+        " one.</p>"
     )
-    return frame, event
-
-
-def _selected_lender_id(event, frame) -> str | None:
-    """Map a table row click to a lender id.
-
-    The event is the value st.dataframe returns when on_select is set, not a
-    session_state entry: widget state is keyed on the widget, and reading a
-    hand-built session key is the way this silently stops working. Split out as a
-    pure function so the row-index mapping is testable without a click.
-    """
-    if event is None or frame is None or frame.empty:
-        return None
-    try:
-        rows = list(event.selection.rows)
-    except (AttributeError, TypeError):
-        return None
-    if not rows:
-        return None
-    i = rows[0]
-    if not isinstance(i, int) or not 0 <= i < len(frame):
-        return None
-    return str(frame.iloc[i]["id"])
-
-
-def _largest_category(label: dict) -> str:
-    """Name of the biggest observed complaint category, for the lender list."""
-    scored = [
-        row
-        for row in _complaint_rows(label)
-        if row["slug"] != "other" and row["complaints"] > 0
-    ]
-    if not scored:
-        return "—"
-    return scored[0]["label"]
 
 
 PEER_WORDING = {
@@ -444,15 +421,6 @@ PEER_WORDING = {
 
 # How a dimension is named in the "what to pay attention to" summary. Keyed by
 # the same slugs as the artifact so the two cannot drift.
-WATCH_PHRASE = {
-    "fees": "fee disclosures and automatic-withdrawal terms",
-    "withdrawal": "authorisation for automatic withdrawals, and the dates and amounts taken",
-    "servicing": "payment-crediting procedures, contact channels and payoff handling",
-    "unauthorized": "your application and authorisation records, and account activity",
-    "credit_rep": "what is reported to credit bureaus and how to dispute it",
-}
-
-
 def _complaint_rows(label: dict) -> list[dict]:
     """The five scored types plus Other, ordered for reading.
 
@@ -1000,53 +968,39 @@ with lender_tab:
 
     lenders = lender_index()
 
-    # Search on the left, profile on the right, so a lender and the control that
-    # produced it are on screen together and neither pushes the other down the
-    # page. Streamlit stacks the columns on narrow screens by itself.
-    search_col, report_col = st.columns([1, 2], gap="large")
+    # One search field, one click, one profile. The picker sits above the report
+    # rather than beside it: a narrow column of lender names is hard to scan, and
+    # the profile is the thing worth the vertical space.
+    query = st.text_input(
+        "Search for a lender",
+        placeholder="Start typing a lender name\u2026",
+        key=f"{LENDER_KEY}_query",
+        live=True,
+        type="default",
+    )
+    needle = query.strip()
+    picked_id = st.session_state.get(LENDER_KEY)
 
-    with search_col:
-        # live=True commits 250ms after typing stops, so the table filters as the
-        # user types with no Enter. This one field is the only way in: retyping is
-        # how you change lenders.
-        query = st.text_input(
-            "Search for a lender",
-            placeholder="Start typing a lender name…",
-            key=f"{LENDER_KEY}_query",
-            live=True,
+    _render_lender_picker(lenders, needle, picked_id)
+
+    # Re-read rather than reuse the value from above: the click is applied inside
+    # the picker, so a value captured before it is always one interaction stale.
+    picked_id = st.session_state.get(LENDER_KEY)
+
+    if picked_id is None:
+        section_card(
+            "<h3>No lender selected</h3>"
+            '<p class="kyl-note">Search for a lender above to see its complaint'
+            " profile. What you see is what consumers reported to the CFPB about"
+            " that lender, alongside a comparison against modeled payday peers."
+            " It is not a safety verdict.</p>"
         )
-        needle = query.strip()
-        if not needle:
-            st.html(
-                '<p class="kyl-note" style="margin:.4rem 0 0">Showing all lenders.'
-                " Sort any column to compare them, or type to narrow.</p>"
-            )
-        frame, event = _render_comparison_table(lenders, needle)
-
-        # Row selection drives the profile. The click lands here on the rerun it
-        # triggered, so picked_id is re-read below rather than captured earlier:
-        # reading it before this block would render the previous lender for one
-        # run, making every selection appear to land late.
-        chosen = _selected_lender_id(event, frame)
-        if chosen is not None:
-            st.session_state[LENDER_KEY] = chosen
-
-    with report_col:
-        picked_id = st.session_state.get(LENDER_KEY)
-        if picked_id is None:
-            section_card(
-                "<h3>No lender selected</h3>"
-                '<p class="kyl-note">Pick a row from the list, or search for a'
-                " lender, to see its complaint profile. Each row below is one"
-                " complaint type compared against modeled payday peers; hover a"
-                " row for the numbers behind the verdict.</p>"
-            )
+    else:
+        label = get_lender(picked_id)
+        if label is None:
+            section_card("<h3>Lender not found</h3>")
         else:
-            label = get_lender(picked_id)
-            if label is None:
-                section_card("<h3>Lender not found</h3>")
-            else:
-                _render_lender_report(label)
+            _render_lender_report(label)
 
 # ==========================================================================
 # 2. Household Financial Context
