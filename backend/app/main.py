@@ -15,8 +15,7 @@ from app.models import (
 app = FastAPI(
     title="FinePrint API",
     description=(
-        "Backend for FinePrint: the CFPB lender Safety Label and the household "
-        "financial context assessment. The two are independent."
+        ""
     ),
     version="0.3.0",
 )

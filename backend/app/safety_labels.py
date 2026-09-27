@@ -261,6 +261,9 @@ def build_payload(
                 "complaint data is available."
             ),
             "caveats": [
+                # Each of these is asserted by test_methodology_disclosures_present.
+                # They are consumer-facing guardrails, not decoration: tightening
+                # the wording is fine, dropping the substance is not.
                 "CFPB complaints are consumer-submitted reports and do not "
                 "necessarily indicate verified wrongdoing.",
                 "Complaint volume is used to communicate evidence strength; a "
