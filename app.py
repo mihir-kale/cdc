@@ -944,39 +944,44 @@ with lender_tab:
 
     lenders = lender_index()
 
-    # One search field, one click, one profile. The picker sits above the report
-    # rather than beside it: a narrow column of lender names is hard to scan, and
-    # the profile is the thing worth the vertical space.
-    query = st.text_input(
-        "Search for a lender",
-        placeholder="Start typing a lender name\u2026",
-        key=f"{LENDER_KEY}_query",
-        live=True,
-        type="default",
-    )
-    needle = query.strip()
-    picked_id = st.session_state.get(LENDER_KEY)
+    # Search and selection on the left, the profile it produces on the right, so
+    # the control and its result are on screen together: picking a different
+    # lender does not require scrolling back up to find the search field, and the
+    # two halves can be compared at a glance. Streamlit stacks the columns itself
+    # below its own breakpoint, so this stays usable on a phone.
+    search_col, report_col = st.columns([1, 2], gap="large")
 
-    _render_lender_picker(lenders, needle, picked_id)
-
-    # Re-read rather than reuse the value from above: the click is applied inside
-    # the picker, so a value captured before it is always one interaction stale.
-    picked_id = st.session_state.get(LENDER_KEY)
-
-    if picked_id is None:
-        section_card(
-            "<h3>No lender selected</h3>"
-            '<p class="kyl-note">Search for a lender above to see its complaint'
-            " profile. What you see is what consumers reported to the CFPB about"
-            " that lender, alongside a comparison against modeled payday peers."
-            " It is not a safety verdict.</p>"
+    with search_col:
+        query = st.text_input(
+            "Search for a lender",
+            placeholder="Start typing a lender name\u2026",
+            key=f"{LENDER_KEY}_query",
+            live=True,
+            type="default",
         )
-    else:
-        label = get_lender(picked_id)
-        if label is None:
-            section_card("<h3>Lender not found</h3>")
+        needle = query.strip()
+        picked_id = st.session_state.get(LENDER_KEY)
+        _render_lender_picker(lenders, needle, picked_id)
+        # Re-read rather than reuse the value from above: the click is applied
+        # inside the picker, so a value captured before it is one interaction
+        # stale, and the profile would show the previous lender for a run.
+        picked_id = st.session_state.get(LENDER_KEY)
+
+    with report_col:
+        if picked_id is None:
+            section_card(
+                "<h3>No lender selected</h3>"
+                '<p class="kyl-note">Search for a lender to see its complaint'
+                " profile. What you see is what consumers reported to the CFPB"
+                " about that lender, alongside a comparison against modeled payday"
+                " peers. It is not a safety verdict.</p>"
+            )
         else:
-            _render_lender_report(label)
+            label = get_lender(picked_id)
+            if label is None:
+                section_card("<h3>Lender not found</h3>")
+            else:
+                _render_lender_report(label)
 
 # ==========================================================================
 # 2. Household Financial Context

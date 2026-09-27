@@ -114,40 +114,59 @@ color:{t['muted']}; font-size: .875rem; line-height: 1.55; margin: .35rem 0 0;
 }}
 
 /* ------------------------------------------------------------------- nav */
-/* Tabs are the navigation. Scoped by role/aria so the selected state is styled
-   from the accessibility attribute rather than a generated class. The gap and
-   padding are generous: at .25rem the three tabs read as one run of text
-   rather than as separate destinations. */
-[data-testid="stTabs"] [role="tablist"]{{
-gap: .6rem; border-bottom: 1px solid{t['border']}; padding-bottom: 0;
+/* Tabs are the navigation, styled from the accessibility attributes rather than a
+   generated class, so the selected state survives a Streamlit upgrade.
+
+   The target is [role="tab"], NOT button. Streamlit 1.64 renders each tab as a
+   div[role="tab"] wrapping a markdown paragraph; there is no button element in
+   the tablist at all. An earlier version of this file styled
+   "[role=tablist] button", which matched nothing, so every rule below was dead
+   and the tabs fell back to whatever the host theme happened to be. That is how
+   they ended up white on white: with .streamlit/config.toml missing, the
+   deployed app inherited a theme whose tab text is white while this app's own
+   background is light.
+
+   Colour is now set on the tab AND on its descendants, because the visible text
+   is a paragraph inside a markdown container and an inherited colour can be
+   overridden downstream. Verified in Chrome rather than assumed. */
+[data-testid="stTabs"] [role="tablist"] {{
+  gap: .4rem; border-bottom: 1px solid {t['border']}; padding-bottom: 0;
   overflow-x: auto; scrollbar-width: thin; flex-wrap: nowrap;
   -webkit-overflow-scrolling: touch;
 }}
-[data-testid="stTabs"] [role="tablist"] button{{
-flex: 1 1 auto; min-width: max-content; min-height:{t['tap']};
-background: transparent; color:{t['muted']};
+[data-testid="stTabs"] [role="tablist"] [role="tab"] {{
+  flex: 1 1 auto; min-width: max-content; min-height: {t['tap']};
+  display: flex; align-items: center;
+  background: transparent;
+  color: {t['muted']};
   border: 1px solid transparent; border-bottom: 2px solid transparent;
-border-radius:{t['radius_sm']} {t['radius_sm']} 0 0;
+  border-radius: {t['radius_sm']} {t['radius_sm']} 0 0;
   font-size: .95rem; font-weight: 600; padding: .7rem 1.1rem;
-  margin-bottom: -1px;
+  margin-bottom: -1px; cursor: pointer;
   transition: background-color .12s ease, color .12s ease;
 }}
-[data-testid="stTabs"] [role="tablist"] button:hover{{
-background:{t['primary_soft']}; color: {t['primary']};
+/* The label is a <p> inside the tab, so pin it rather than inherit into it. */
+[data-testid="stTabs"] [role="tablist"] [role="tab"] p,
+[data-testid="stTabs"] [role="tablist"] [role="tab"] span,
+[data-testid="stTabs"] [role="tablist"] [role="tab"] div {{
+  color: inherit; font: inherit;
+}}
+[data-testid="stTabs"] [role="tablist"] [role="tab"]:hover {{
+  background: {t['primary_soft']}; color: {t['primary']};
 }}
 /* Selected: solid brand fill with white text. Never white on white. */
-[data-testid="stTabs"] [role="tablist"] button[aria-selected="true"]{{
-background:{t['primary']}; color: #FFFFFF;
-border-color:{t['primary']}; border-bottom-color: {t['primary']};
+[data-testid="stTabs"] [role="tablist"] [role="tab"][aria-selected="true"] {{
+  background: {t['primary']}; color: #FFFFFF;
+  border-color: {t['primary']}; border-bottom-color: {t['primary']};
 }}
-[data-testid="stTabs"] [role="tablist"] button[aria-selected="true"]:hover{{
-background:{t['primary_hover']}; color: #FFFFFF;
+[data-testid="stTabs"] [role="tablist"] [role="tab"][aria-selected="true"]:hover {{
+  background: {t['primary_hover']}; color: #FFFFFF;
 }}
-[data-testid="stTabs"] [role="tablist"] button:focus-visible{{
-outline: 3px solid{t['primary']}; outline-offset: 2px;
+[data-testid="stTabs"] [role="tablist"] [role="tab"]:focus-visible {{
+  outline: 3px solid {t['primary']}; outline-offset: 2px;
 }}
 @media (max-width: 768px) {{
-[data-testid="stTabs"] [role="tablist"] button{{ flex: 0 0 auto; font-size: .875rem; }}
+  [data-testid="stTabs"] [role="tablist"] [role="tab"] {{ flex: 0 0 auto; font-size: .875rem; }}
 }}
 
 /* ----------------------------------------------------------------- cards */
