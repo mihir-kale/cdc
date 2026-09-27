@@ -142,8 +142,17 @@ def method_c_scores(features: pd.DataFrame, slug: str) -> np.ndarray:
     return 100.0 * beta_dist.cdf(reference, x + alpha, n - x + beta)
 
 
-def build_records(features: pd.DataFrame) -> list[dict]:
-    """Build one Safety Label record per canonical payday lender."""
+def build_records(
+    features: pd.DataFrame,
+    issues: dict[str, dict[str, list[tuple[str, int]]]] | None = None,
+) -> list[dict]:
+    """Build one Safety Label record per canonical payday lender.
+
+    ``issues`` is the observed CFPB issue composition. It is presentation data:
+    it is not an input to any score, prior, peer rate or comparison, and
+    omitting it leaves the methodology-bearing fields byte-identical.
+    """
+    issues = issues or {}
     references = peer_rates(features)
     scores = {slug: method_c_scores(features, slug) for slug in DIMENSIONS}
     n_all = features["n_complaints"].to_numpy(int)
@@ -151,6 +160,8 @@ def build_records(features: pd.DataFrame) -> list[dict]:
     records: list[dict] = []
     for row_idx, row in features.iterrows():
         n_complaints = int(row["n_complaints"])
+        company = str(row["canonical_company"])
+        buckets = issues.get(company, {})
         dimensions: dict[str, dict] = {}
 
         for slug in DIMENSIONS:
@@ -169,24 +180,41 @@ def build_records(features: pd.DataFrame) -> list[dict]:
             else:
                 comparison = "similar"
 
-            dimensions[slug] = {
+            dimension_count = int(row[f"n_{slug}"])
+            entry = {
                 "score": round(float(scores[slug][row_idx]), 1),
-                "complaints": int(row[f"n_{slug}"]),
+                "complaints": dimension_count,
                 "prevalence": round(float(row[f"post_{slug}"]), 5),
                 "prevalence_lo90": round(lo90, 5),
                 "prevalence_hi90": round(hi90, 5),
                 "comparison": comparison,
             }
+            if issues:
+                # Observed share of this lender's own payday complaints. This is
+                # a composition of complaints, not a rate per customer.
+                entry["share"] = (
+                    round(dimension_count / n_complaints, 5) if n_complaints else 0.0
+                )
+                entry["issues"] = [list(pair) for pair in buckets.get(slug, [])]
+            dimensions[slug] = entry
 
-        records.append(
-            {
-                "id": str(row_idx),
-                "name": str(row["canonical_company"]),
-                "n_complaints": n_complaints,
-                "evidence": evidence_band(n_complaints),
-                "dimensions": dimensions,
+        record = {
+            "id": str(row_idx),
+            "name": company,
+            "n_complaints": n_complaints,
+            "evidence": evidence_band(n_complaints),
+            "dimensions": dimensions,
+        }
+        if issues:
+            other_count = int(row.get("n_outside_dims", 0))
+            record["other"] = {
+                "label": OTHER_LABEL,
+                "summary": OTHER_SUMMARY,
+                "complaints": other_count,
+                "share": round(other_count / n_complaints, 5) if n_complaints else 0.0,
+                "issues": [list(pair) for pair in buckets.get(OTHER_DIMENSION, [])],
             }
-        )
+        records.append(record)
 
     return records
 
@@ -203,15 +231,21 @@ def dimension_metadata(features: pd.DataFrame) -> dict[str, dict]:
             "label": DIMENSION_LABELS[slug],
             "summary": DIMENSION_SUMMARIES[slug],
             "peer_rate": round(references[slug], 5),
+            "consumers_reported": CONSUMER_REPORTED[slug],
+            "what_to_inspect": WATCH_FOR[slug],
         }
         for slug in DIMENSIONS
     }
 
 
-def build_payload(features: pd.DataFrame) -> dict:
+def build_payload(
+    features: pd.DataFrame,
+    issues: dict[str, dict[str, list[tuple[str, int]]]] | None = None,
+    taxonomy: pd.DataFrame | None = None,
+) -> dict:
     """Assemble the full artifact, including the metadata the UI discloses."""
-    records = build_records(features)
-    return {
+    records = build_records(features, issues)
+    payload = {
         "schema_version": 1,
         "method": "Method C (empirical-Bayes Beta-Binomial posterior, peer-referenced)",
         "methodology": {
@@ -247,7 +281,177 @@ def build_payload(features: pd.DataFrame) -> dict:
         "total_complaints": int(features["n_complaints"].sum()),
         "lenders": records,
     }
+    if issues is not None:
+        payload["schema_version"] = 2
+        payload["issues"] = issue_metadata(
+            taxonomy if taxonomy is not None else load_taxonomy()
+        )
+        payload["complaint_share_note"] = (
+            "Shares are of the CFPB payday-loan complaints associated with a "
+            "lender in this dataset. They are not a rate per customer: this "
+            "dataset has no lender-level count of customers, loans or "
+            "transaction volume, so no customer-level complaint rate can be "
+            "computed."
+        )
+    return payload
 
+
+
+# ---------------------------------------------------------------------------
+# Observed complaint composition: the underlying CFPB issue taxonomy
+# ---------------------------------------------------------------------------
+#
+# Added after Method C was validated. Nothing here feeds the score, the peer
+# reference, the priors or the comparison field; this is observed counts only,
+# so the product can lead with what consumers actually reported and keep the
+# modelling as context.
+#
+# The mapping is never reconstructed in the UI. Issue labels, their dimension
+# assignment and their counts are resolved here, offline, and written into the
+# artifact; the browser only reads the result.
+
+ISSUES_CSV = REPO_ROOT / "data" / "processed" / "lender_subproduct_features.csv"
+TAXONOMY_CSV = REPO_ROOT / "data" / "processed" / "issue_taxonomy.csv"
+
+# The sub-product the label is built on. The feature file holds every CFPB
+# sub-product, so restricting to this one is what makes the issue counts line up
+# with the payday complaint totals in the scoring features.
+PAYDAY_SUBPRODUCT = "Payday loan"
+
+# The bucket for issues the taxonomy assigns to a category that is not one of the
+# five scored dimensions: borrower financial distress, collections and
+# repossession, disclosures and marketing, and other-or-unclear. Together these
+# account for exactly the complaints outside the five dimensions, which the test
+# suite asserts against n_outside_dims.
+OTHER_DIMENSION = "other"
+
+OTHER_LABEL = "Other reported issues"
+OTHER_SUMMARY = (
+    "Complaints in categories FinePrint does not score separately, including "
+    "borrower financial distress, collections and repossession, disclosures and "
+    "marketing, and issues that were too unclear to categorise."
+)
+
+# What a consumer can actually inspect, per dimension. Deliberately phrased as
+# things to check rather than things the lender does, because a complaint is an
+# allegation and not a finding.
+WATCH_FOR: dict[str, str] = {
+    "fees": (
+        "Check the APR and fee disclosures, including origination fees, late "
+        "fees and any charges for add-on products or services."
+    ),
+    "withdrawal": (
+        "Check the authorisation for automatic withdrawals, the dates and "
+        "amounts taken, and how to cancel or revoke that authorisation."
+    ),
+    "servicing": (
+        "Check how payments are credited, what happens if a payment is late or "
+        "short, how to reach the lender, and how payoff is handled."
+    ),
+    "unauthorized": (
+        "Check your application and authorisation records, and monitor account "
+        "activity for loans you do not recognise."
+    ),
+    "credit_rep": (
+        "Check what is reported to credit bureaus, and how to dispute an "
+        "inaccurate entry."
+    ),
+}
+
+# Plain-language restatement of each dimension, in the "consumers reported"
+# voice. The existing DIMENSION_SUMMARIES stay as the methodological
+# description; these are the consumer-facing ones.
+CONSUMER_REPORTED: dict[str, str] = {
+    "fees": "Consumers reported fees or interest they did not expect.",
+    "withdrawal": (
+        "Consumers reported problems stopping withdrawals from a bank account, "
+        "or money being withdrawn on an unexpected date or for an unexpected "
+        "amount."
+    ),
+    "unauthorized": (
+        "Consumers reported receiving loans they said they did not apply for."
+    ),
+    "credit_rep": (
+        "Complaints involved information reported to credit bureaus, or "
+        "problems disputing that information."
+    ),
+    "servicing": (
+        "Complaints involved making payments, getting payments credited "
+        "correctly, contacting the lender, or managing the loan."
+    ),
+}
+
+# Maps a taxonomy category onto a scored dimension slug, or onto the other
+# bucket. Derived from DIMENSIONS so the two cannot drift.
+_CATEGORY_TO_DIMENSION: dict[str, str] = {v: k for k, v in DIMENSIONS.items()}
+
+
+def load_taxonomy(csv_path: Path = TAXONOMY_CSV) -> pd.DataFrame:
+    """The validated issue taxonomy: CFPB label to dimension and consumer wording."""
+    taxonomy = pd.read_csv(csv_path)
+    taxonomy["dimension"] = taxonomy["proposed_category"].map(_CATEGORY_TO_DIMENSION)
+    taxonomy["dimension"] = taxonomy["dimension"].fillna(OTHER_DIMENSION)
+    return taxonomy
+
+
+def load_issue_counts(
+    taxonomy: pd.DataFrame,
+    features: pd.DataFrame,
+    csv_path: Path = ISSUES_CSV,
+) -> dict[str, dict[str, list[tuple[str, int]]]]:
+    """Observed complaint counts per lender, per dimension, per CFPB issue.
+
+    Returns ``{lender_name: {dimension: [(issue_key, count), ...]}}``. Only
+    non-zero counts are kept, and each dimension's list is ordered by count so
+    the UI can present the most-reported issue first without sorting.
+
+    The dimension totals produced here are asserted in the test suite to equal
+    the scoring features' own ``n_<slug>`` columns, so this rollup cannot quietly
+    diverge from the validated pipeline.
+    """
+    raw = pd.read_csv(csv_path)
+    payday = raw[raw["Sub-product"] == PAYDAY_SUBPRODUCT]
+    count_columns = [c for c in raw.columns if c.startswith("cnt__")]
+
+    key_to_dimension = dict(zip(taxonomy["issue_key"], taxonomy["dimension"]))
+    per_company = payday.groupby("canonical_company")[count_columns].sum()
+
+    wanted = set(features["canonical_company"])
+    result: dict[str, dict[str, list[tuple[str, int]]]] = {}
+    for company, row in per_company.iterrows():
+        if company not in wanted:
+            continue
+        buckets: dict[str, list[tuple[str, int]]] = {}
+        for column, value in row.items():
+            count = int(value)
+            if count <= 0:
+                continue
+            key = column.replace("cnt__", "")
+            dimension = key_to_dimension.get(key)
+            if dimension is None:  # pragma: no cover - taxonomy is closed
+                continue
+            buckets.setdefault(dimension, []).append((key, count))
+        for dimension, pairs in buckets.items():
+            pairs.sort(key=lambda pair: (-pair[1], pair[0]))
+        result[str(company)] = buckets
+    return result
+
+
+def issue_metadata(taxonomy: pd.DataFrame) -> dict[str, dict]:
+    """Issue key to label, dimension and conduct signal, emitted once.
+
+    Per-lender records carry only ``[key, count]`` pairs, so the labels are not
+    repeated 482 times. This is the same reason dimension explanations live at
+    the top level rather than inside every record.
+    """
+    return {
+        str(row["issue_key"]): {
+            "label": str(row["canonical_issue"]),
+            "dimension": str(row["dimension"]),
+            "conduct_signal": str(row["conduct_signal"]),
+        }
+        for _, row in taxonomy.iterrows()
+    }
 
 def load_features(csv_path: Path = FEATURES_CSV) -> pd.DataFrame:
     """Read the processed CFPB features and sanity-check the assumptions."""
@@ -277,10 +481,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--features", type=Path, default=FEATURES_CSV)
     parser.add_argument("--output", type=Path, default=OUTPUT_JSON)
+    parser.add_argument("--issues", type=Path, default=ISSUES_CSV)
+    parser.add_argument("--taxonomy", type=Path, default=TAXONOMY_CSV)
     args = parser.parse_args()
 
     features = load_features(args.features)
-    payload = build_payload(features)
+
+    # Observed complaint composition. Additive only: if the processed issue
+    # features are missing the artifact is still built, just without the
+    # per-issue breakdown.
+    issues = None
+    taxonomy = None
+    if args.issues.exists() and args.taxonomy.exists():
+        taxonomy = load_taxonomy(args.taxonomy)
+        issues = load_issue_counts(taxonomy, features, args.issues)
+
+    payload = build_payload(features, issues, taxonomy)
     path = write_json(payload, args.output)
 
     size_kb = path.stat().st_size / 1024

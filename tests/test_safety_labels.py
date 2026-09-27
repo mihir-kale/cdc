@@ -23,10 +23,15 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 from app.safety_labels import (  # noqa: E402
     DIMENSIONS,
+    ISSUES_CSV,
     OUTPUT_JSON,
+    OTHER_DIMENSION,
+    TAXONOMY_CSV,
     build_payload,
     evidence_band,
     load_features,
+    load_issue_counts,
+    load_taxonomy,
     method_c_scores,
     peer_rates,
     write_json,
@@ -146,6 +151,8 @@ class TestMethodC(unittest.TestCase):
     def setUpClass(cls) -> None:
         try:
             cls.features = load_features()
+            cls.taxonomy = load_taxonomy()
+            cls.issues = load_issue_counts(cls.taxonomy, cls.features)
         except (FileNotFoundError, ValueError) as exc:
             raise unittest.SkipTest(f"processed features unavailable: {exc}") from exc
 
@@ -195,7 +202,7 @@ class TestMethodC(unittest.TestCase):
     def test_regenerating_reproduces_the_committed_artifact(self) -> None:
         """The committed JSON must be exactly what the script produces."""
         committed = load_artifact()
-        rebuilt = build_payload(self.features)
+        rebuilt = build_payload(self.features, self.issues, self.taxonomy)
         self.assertEqual(
             json.dumps(rebuilt, separators=(",", ":")),
             json.dumps(committed, separators=(",", ":")),
@@ -213,3 +220,137 @@ class TestMethodC(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestComplaintComposition(unittest.TestCase):
+    """The observed complaint mix must account for every complaint, exactly.
+
+    The product leads with "what consumers report about this lender", so the
+    displayed composition has to reconcile with the lender's own complaint total.
+    If it does not, the hero number on the page is wrong.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.artifact = load_artifact()
+        try:
+            cls.features = load_features().set_index("canonical_company")
+            cls.taxonomy = load_taxonomy()
+        except (FileNotFoundError, ValueError) as exc:
+            raise unittest.SkipTest(f"processed features unavailable: {exc}") from exc
+
+    def test_artifact_carries_observed_composition(self) -> None:
+        self.assertIn("issues", self.artifact, "artifact has no issue taxonomy")
+        self.assertEqual(self.artifact["schema_version"], 2)
+        for lender in self.artifact["lenders"][:1]:
+            for slug in DIMENSIONS:
+                self.assertIn("share", lender["dimensions"][slug])
+                self.assertIn("issues", lender["dimensions"][slug])
+            self.assertIn("other", lender)
+
+    def test_dimensions_plus_other_equal_total_complaints(self) -> None:
+        """sum(five dimensions) + Other == n_complaints, for every lender."""
+        for lender in self.artifact["lenders"]:
+            counted = sum(
+                lender["dimensions"][slug]["complaints"] for slug in DIMENSIONS
+            ) + lender["other"]["complaints"]
+            self.assertEqual(
+                counted,
+                lender["n_complaints"],
+                f"{lender['name']}: {counted} != {lender['n_complaints']}",
+            )
+
+    def test_shares_sum_to_one(self) -> None:
+        """Five dimension shares + Other share == 1, within display tolerance."""
+        for lender in self.artifact["lenders"]:
+            total = lender["n_complaints"]
+            if not total:
+                continue
+            shares = sum(
+                lender["dimensions"][slug]["share"] for slug in DIMENSIONS
+            ) + lender["other"]["share"]
+            self.assertAlmostEqual(
+                shares, 1.0, places=4, msg=f"{lender['name']}: shares sum to {shares}"
+            )
+
+    def test_share_matches_count_over_total(self) -> None:
+        for lender in self.artifact["lenders"]:
+            total = lender["n_complaints"]
+            if not total:
+                continue
+            for slug in DIMENSIONS:
+                dim = lender["dimensions"][slug]
+                self.assertAlmostEqual(
+                    dim["share"],
+                    dim["complaints"] / total,
+                    places=4,
+                    msg=f"{lender['name']}/{slug}",
+                )
+            self.assertAlmostEqual(
+                lender["other"]["share"],
+                lender["other"]["complaints"] / total,
+                places=4,
+                msg=f"{lender['name']}/other",
+            )
+
+    def test_issue_counts_roll_up_to_their_dimension(self) -> None:
+        """Each dimension's issue counts must sum to that dimension's count."""
+        for lender in self.artifact["lenders"]:
+            for slug in DIMENSIONS:
+                rolled = sum(count for _key, count in lender["dimensions"][slug]["issues"])
+                self.assertEqual(
+                    rolled,
+                    lender["dimensions"][slug]["complaints"],
+                    f"{lender['name']}/{slug}: issues sum to {rolled}",
+                )
+            rolled_other = sum(count for _k, count in lender["other"]["issues"])
+            self.assertEqual(
+                rolled_other,
+                lender["other"]["complaints"],
+                f"{lender['name']}/other: issues sum to {rolled_other}",
+            )
+
+    def test_issues_are_assigned_to_the_dimension_they_are_counted_in(self) -> None:
+        """An issue key must never appear under a dimension the taxonomy denies it."""
+        dimension_of = {
+            key: meta["dimension"] for key, meta in self.artifact["issues"].items()
+        }
+        for lender in self.artifact["lenders"]:
+            for slug in DIMENSIONS:
+                for key, _count in lender["dimensions"][slug]["issues"]:
+                    self.assertEqual(
+                        dimension_of[key], slug, f"{key} filed under {slug}"
+                    )
+            for key, _count in lender["other"]["issues"]:
+                self.assertEqual(dimension_of[key], OTHER_DIMENSION, key)
+
+    def test_issue_rollup_matches_the_scoring_features(self) -> None:
+        """The rollup is derived from the same pipeline as the scores.
+
+        Guards against the issue breakdown drifting from the validated features:
+        the dimension totals it produces must be the features' own n_<slug>.
+        """
+        issues = load_issue_counts(self.taxonomy, load_features())
+        for company, buckets in issues.items():
+            row = self.features.loc[company]
+            for slug in DIMENSIONS:
+                rolled = sum(count for _k, count in buckets.get(slug, []))
+                self.assertEqual(
+                    rolled, int(row[f"n_{slug}"]), f"{company}/{slug}"
+                )
+
+    def test_watch_for_guidance_present_for_every_dimension(self) -> None:
+        for slug, meta in self.artifact["dimensions"].items():
+            self.assertTrue(meta.get("what_to_inspect"), f"{slug} has no guidance")
+            self.assertTrue(meta.get("consumers_reported"), f"{slug} has no wording")
+            # Guidance must point the reader at things to check, not assert conduct.
+            self.assertNotIn("this lender charges", meta["what_to_inspect"].lower())
+            self.assertNotIn("this lender takes", meta["what_to_inspect"].lower())
+
+    def test_consumer_wording_is_allegation_not_fact(self) -> None:
+        for slug, meta in self.artifact["dimensions"].items():
+            text = meta["consumers_reported"].lower()
+            self.assertTrue(
+                text.startswith("consumers reported") or text.startswith("complaints involved"),
+                f"{slug} wording does not attribute to the consumer: {text}",
+            )
