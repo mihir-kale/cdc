@@ -495,35 +495,19 @@ def _complaint_rows(label: dict) -> list[dict]:
 
 
 def _watch_for_summary(label: dict, rows: list[dict]) -> str:
-    """Deterministic "what should I pay attention to?" copy.
-
-    Built from the largest observed categories only, and phrased as things to
-    inspect rather than things the lender does. No model, no generation: the text
-    is assembled from the artifact's own guidance, so it cannot assert anything
-    the complaint counts do not support.
-    """
+    """Generate a concise watch-out summary from top complaint categories."""
     scored = [r for r in rows if r["slug"] != "other" and r["complaints"] > 0]
     if not scored:
-        return (
-            "There are no complaints in this dataset for this lender, so there is"
-            " no pattern here to inspect."
-        )
+        return "No complaints on record for this lender."
 
     top = scored[:2]
     names = [r["label"].split(" &")[0].split(" /")[0].lower() for r in top]
-    if len(names) == 1:
-        subject = names[0]
-        verb = "makes up the largest share"
-    else:
-        subject = " and ".join(names)
-        verb = "make up the largest share"
+    subject = " and ".join(names)
+    verb = "makes up" if len(names) == 1 else "make up"
 
-    # Each guidance string already opens with "Check", and the sentence supplies
-    # its own verb, so strip that and lowercase only the first letter. Lowercasing
-    # the whole string would turn APR into apr.
     def _clause(text: str) -> str:
         text = text.strip().rstrip(".")
-        if text[:5].lower() == "check":
+        if text.lower().startswith("check"):
             text = text[5:].strip()
         return text[:1].lower() + text[1:] if text else text
 
@@ -533,19 +517,12 @@ def _watch_for_summary(label: dict, rows: list[dict]) -> str:
     total = int(label["n_complaints"])
 
     if total < 10:
-        lead = (
-            f"With only {total} complaint{'' if total == 1 else 's'} on record, any"
-            " single category can look dominant by accident, so treat this as a"
-            " starting point rather than a reliable pattern."
-        )
+        plural = "" if total == 1 else "s"
+        lead = f"With only {total} complaint{plural}, treat this as an initial signal rather than a clear pattern."
     else:
-        lead = (
-            f"{subject.capitalize()} {verb} of the CFPB payday-loan complaints"
-            " associated with this lender."
-        )
-    if not guidance:
-        return lead
-    return f"{lead} Worth checking before borrowing: {guidance}."
+        lead = f"{subject.capitalize()} {verb} the largest share of complaints for this lender."
+
+    return f"{lead} Worth inspecting: {guidance}." if guidance else lead
 
 
 def _render_lender_report(label: dict) -> None:
@@ -571,15 +548,14 @@ def _render_lender_report(label: dict) -> None:
     )
 
     if sparse:
+        plural = "" if total == 1 else "s"
         st.html(
             '<div class="kyl-sparse" role="note">'
-            "<h3>Very limited complaint history</h3>"
-            f'<p>CFPB has {total} payday-loan complaint{"" if total == 1 else "s"}'
-            " associated with this lender in our dataset. That is too little"
-            " evidence to characterise its complaint pattern reliably, so the"
-            " shares below describe the complaints we have rather than a stable"
-            " underlying pattern.</p></div>"
-        )
+            "<h3>Limited complaint history</h3>"
+            f"<p>With only {total} CFPB complaint{plural} on record, there is too little "
+            "data to establish a reliable pattern. Shares below reflect available complaints, "
+            "not a stable baseline.</p></div>"
+    )
 
     # --- evidence, stated up front because it governs everything below ---
     st.html(
