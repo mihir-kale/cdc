@@ -298,21 +298,68 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
 [data-testid="stAlert"] p{{ font-size: .9rem; line-height: 1.5; }}
 
 /* ------------------------------------------------------- kyl components */
-/* Masthead. A teal band, the mark in a white tile on the left, the name and
+/* Masthead. A full-bleed teal band, mark in a white tile on the left, name and
    tagline beside it.
 
-   The tile is not decoration. The shark's outline is near-black, and laid
-   directly on the deep teal the outline disappears and the shape loses its
-   edge; a white ground keeps the silhouette readable and looks deliberate.
+   Full-bleed because inside .block-container the band was capped at 1120px and
+   centred, so on a wide screen it read as a card floating in white with 160px
+   either side. The negative-margin breakout spans the viewport without needing
+   any change to the page container, and the top margin is cancelled against the
+   same padding so the colour reaches the top of the window too. The padding
+   that is added back is what keeps the wordmark clear of Streamlit's own
+   toolbar, which sits at the top of the viewport.
+
+   The inner wrapper restores the page's own measure and side padding, so the
+   wordmark lines up with the content below rather than hugging the window edge.
+
+   The white tile under the mark is not decoration. The shark's outline is
+   near-black, and laid directly on the deep teal the outline disappears and the
+   silhouette loses its edge.
 
    static/kyl-logo.png is new.png, which arrives already cropped to its content
    with the background removed at 287x234, so no trimming happens here. */
 .kyl-header {{
-  display: flex; align-items: center; gap: .9rem;
+  /* Break out of the centred 1120px container to the full viewport width. */
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  /* Cancel the space above this element so the band reaches the top of the
+     window. What is actually in force is Streamlit's own 6rem top padding on
+     [data-testid="stMainBlockContainer"] plus 1rem on the element container, and
+     the .block-container rule in this sheet does not match that element in 1.64
+     -- which is why cancelling 3.25rem earlier left the band 60px down the
+     page. The padding added back is what keeps the wordmark clear of
+     Streamlit's toolbar, which is pinned to the top of the viewport. */
+  margin-top: -7rem;
   background: {t['primary']};
-  border-radius: {t['radius']};
-  padding: .95rem 1.25rem;
-  margin: 0 0 .9rem;
+  padding: 4.25rem 0 1.1rem;
+  border-radius: 0;
+}}
+/* Streamlit drops that top padding to 2.5rem below its own breakpoint, so the
+   breakout has to shrink with it or the band climbs off the top of the window
+   and the wordmark lands underneath the toolbar. */
+@media (max-width: 768px) {{
+  .kyl-header {{ margin-top: -3.5rem; padding-top: 3.5rem; }}
+}}
+/* Streamlit pins its own toolbar over the top of the page: absolutely
+   positioned, z-index 999990, 60px tall, with an opaque near-white background.
+   The band above is at y=0, so left alone that toolbar simply covers the top of
+   the masthead and leaves a white strip that reads exactly like the leftover
+   margin the breakout was meant to remove, so it is made transparent.
+
+   Its chrome is dark grey against the theme's near-black base, which is only
+   about 2.4:1 on the band, so it is knocked up to white (5.36:1). */
+[data-testid="stHeader"] {{ background: transparent; }}
+[data-testid="stHeader"] button,
+[data-testid="stHeader"] button *,
+[data-testid="stMainMenuButton"] {{ color: #FFFFFF; }}
+/* The fill is deliberately left alone. Streamlit's menu button is a single SVG
+   whose paths include its own container, so painting every path white filled
+   the button in as a solid square; currentColor alone carries the recolouring. */
+.kyl-header-inner {{
+  max-width: {t['maxw']};
+  margin: 0 auto;
+  padding: 0 1.5rem;
+  display: flex; align-items: center; gap: .9rem;
 }}
 .kyl-header-mark {{
   display: flex; align-items: center; justify-content: center;
@@ -335,7 +382,6 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
   color: rgba(255, 255, 255, .82); font-size: .95rem;
   margin: .2rem 0 0; display: block;
 }}
-.kyl-lede{{ color: {t['muted']}; font-size: 1.05rem; line-height: 1.6; margin: .6rem 0 0; }}
 
 /* Section shell so every block sits on one card surface with one border. */
 .kyl-card{{

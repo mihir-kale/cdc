@@ -1006,7 +1006,11 @@ st.html(
     # some work instead of appearing only in buttons and focus rings. The mark
     # sits in a white tile rather than straight on the teal: the shark's outline
     # is near-black and would disappear into a dark ground.
+    # The band is full-bleed, so its content needs an inner wrapper constrained
+    # to the same 1120px column the page below uses, otherwise the wordmark
+    # would sit against the viewport edge while everything else is inset.
     '<header class="kyl-header">'
+    '<div class="kyl-header-inner">'
     '<span class="kyl-header-mark">'
     '<img src="app/static/kyl-logo.png" alt="" width="40" height="33">'
     "</span>"
@@ -1014,12 +1018,8 @@ st.html(
     '<span class="kyl-mark">Know Your Loan</span>'
     '<span class="kyl-tag">Three independent tools for payday-loan questions</span>'
     "</span>"
+    "</div>"
     "</header>"
-)
-st.html(
-    '<p class="kyl-lede">Explore CFPB complaint patterns, understand a household\u2019s'
-    " position within survey data, and estimate the cost and timeline of repaying a"
-    " loan.</p>"
 )
 
 EXAMPLES = _EXAMPLES
