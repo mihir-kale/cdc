@@ -1,5 +1,4 @@
 """Design tokens and scoped stylesheet for the Know Your Lender Streamlit app.
-
 Every colour, size and radius used by the interface is declared once in
 :data:`TOKENS` and the stylesheet below is generated from it, so there is one
 place to change the palette and no chance of a hardcoded colour drifting away
@@ -51,6 +50,23 @@ TOKENS = {
         "Arial, 'Noto Sans', sans-serif"
     ),
 }
+
+# Categorical palette for the five complaint types plus the uncovered remainder.
+#
+# These are identity colours, not judgement: which hue a slice gets says nothing
+# about whether it is good or bad, so no red/green valence and no red/green pair.
+# Five distinguishable hues at similar lightness, and the "other" remainder is
+# deliberately neutral grey so it recedes -- it is the part of the data these
+# five types do not cover, and it should not compete for attention.
+CATEGORY_STYLE = {
+    "withdrawal": "#4C6EF5",  # blue
+    "fees": "#F59F00",  # amber
+    "unauthorized": "#15AABF",  # cyan
+    "credit_rep": "#9C36B5",  # violet
+    "servicing": "#E64980",  # pink
+    "other": "#98A2B3",  # neutral grey for the uncovered remainder
+}
+
 
 def stylesheet() -> str:
     t = TOKENS
@@ -419,6 +435,39 @@ a {{ color: {t['primary']}; }}
 @media (max-width: 480px) {{
   .kyl-stats {{ grid-template-columns: minmax(0, 1fr); gap: 0; }}
   .kyl-stats dd {{ text-align: left; padding: 0 0 .45rem; border-bottom: 1px solid {t['border']}; }}
+}}
+
+/* Composition bar: share of a lender's complaints by type.
+   A stacked bar, not a pie, because the median lender has four of the five
+   categories at zero and because the five types do not always cover the whole
+   -- the uncovered remainder is its own neutral segment. */
+.kyl-stack {{
+  display: flex; width: 100%; height: 1.6rem; margin: .7rem 0 .6rem;
+  border-radius: {t['radius_sm']}; overflow: hidden;
+  border: 1px solid {t['border']}; background: {t['card']};
+}}
+/* A non-zero share narrower than this would render as nothing at all, which
+   would read as "no complaints of this type" when the count is above zero. Two
+   pixels is the smallest mark that can honestly say "some". Exact values are in
+   the legend and the title attribute. */
+.kyl-seg {{ display: block; min-width: 2px; }}
+.kyl-seg:hover {{ filter: brightness(.92); }}
+.kyl-legend {{
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: .15rem .9rem;
+}}
+.kyl-legend li {{
+  display: grid; grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: .5rem; align-items: center; font-size: .8rem; line-height: 1.5;
+}}
+.kyl-swatch {{
+  width: 10px; height: 10px; border-radius: 3px; display: block;
+  border: 1px solid rgba(16, 24, 40, .12);
+}}
+.kyl-legend-name {{ color: {t['text']}; }}
+.kyl-legend-val {{
+  color: {t['muted']}; font-variant-numeric: tabular-nums; white-space: nowrap;
 }}
 
 /* Result readout after a successful estimate. */

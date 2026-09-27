@@ -66,7 +66,7 @@ _spec.loader.exec_module(_label_store)
 get_lender = _label_store.get_lender
 lender_index = _label_store.lender_index
 
-from kyl_theme import TOKENS, stylesheet  # noqa: E402
+from kyl_theme import CATEGORY_STYLE, TOKENS, stylesheet  # noqa: E402
 
 dataset_summary = _label_store.dataset_summary
 
@@ -240,6 +240,100 @@ def _complaint_evidence_stats() -> dict[str, float] | None:
     }
 
 
+def _render_composition(label: dict) -> None:
+    """Share of this lender's payday complaints by type, as a stacked bar.
+
+    Deliberately not a pie chart. A pie's slices must sum to the whole, and here
+    they frequently do not: across the dataset the five types cover a mean of
+    only 78% of a lender's complaints, 72 lenders have more than half their
+    complaints outside these five types, and 61 have all of them outside. Drawing
+    five slices that sum to 100% would claim these types are the entire
+    composition when they are not. The uncovered remainder is therefore drawn as
+    its own neutral segment, which turns the coverage gap into information rather
+    than hiding it.
+
+    A stacked bar rather than a pie for a second reason: the median lender has
+    four of the five categories at zero, so a pie would usually be one or two
+    slices. Bars degrade honestly when most of the data is absent.
+
+    Colour identifies the type and nothing else; every segment is also labelled
+    with its count and share, so the chart never depends on colour alone.
+    """
+    dims = label["dimensions"]
+    total = int(label["n_complaints"])
+    if total <= 0:
+        return
+
+    counts = {slug: int(value["complaints"]) for slug, value in dims.items()}
+    covered = sum(counts.values())
+    uncovered = total - covered
+
+    segments = []
+    for slug, value in dims.items():
+        if counts[slug] > 0:
+            segments.append((slug, counts[slug], 100 * counts[slug] / total))
+    if uncovered > 0:
+        segments.append(("other", uncovered, 100 * uncovered / total))
+    # Largest first so the leading edge of the bar is stable between lenders.
+    segments.sort(key=lambda seg: -seg[2])
+
+    bar = "".join(
+        f'<span class="kyl-seg" style="width:{share:.3f}%;'
+        f'background:{CATEGORY_STYLE[slug]}" '
+        f'title="{esc(_complaint_type_name(slug, dims))}: '
+        f'{count:,} of {total:,} ({share:.1f}%)"></span>'
+        for slug, count, share in segments
+    )
+
+    # The legend lists all five types even at zero. A category with no
+    # complaints is a finding about the lender, not an absence of one, and
+    # dropping it would quietly imply the other types account for everything.
+    legend_rows = [
+        (slug, counts[slug], 100 * counts[slug] / total) for slug in dims
+    ] + ([("other", uncovered, 100 * uncovered / total)] if uncovered else [])
+    legend_rows.sort(key=lambda row: -row[2])
+    legend = "".join(
+        f'<li><span class="kyl-swatch" style="background:{CATEGORY_STYLE[slug]}"'
+        f' aria-hidden="true"></span>'
+        f'<span class="kyl-legend-name">'
+        f'{esc(_complaint_type_name(slug, dims))}</span>'
+        f'<span class="kyl-legend-val">{count:,} &middot; {share:.1f}%</span></li>'
+        for slug, count, share in legend_rows
+    )
+
+    coverage = (
+        "These five types account for all of this lender's complaints in the"
+        " dataset."
+        if uncovered == 0
+        else f"{uncovered:,} complaint{'' if uncovered == 1 else 's'} "
+        f"({100 * uncovered / total:.1f}%) fall outside these five types and are"
+        " shown as the grey segment."
+    )
+
+    st.html(
+        '<section class="kyl-card">'
+        "<h3>Share of complaint types</h3>"
+        f'<p class="kyl-note">Out of {esc(plural(total, "CFPB payday complaint"))}'
+        " in this dataset. Hover a segment for its count and share.</p>"
+        f'<div class="kyl-stack" role="img" aria-label="Composition of this'
+        f' lender’s complaints by type: {esc(", ".join(f"{_complaint_type_name(sl, dims)} {sh:.0f} percent" for sl, _c, sh in segments))}.">'
+        f">{bar}</div>"
+        f'<ul class="kyl-legend">{legend}</ul>'
+        f'<p class="kyl-fine">{esc(coverage)} All five complaint types FinePrint'
+        " scores are listed above, including any at zero. The bar itself only"
+        " draws segments with a non-zero share.</p>"
+        "</section>"
+    )
+
+
+def _complaint_type_name(slug: str, dims: dict) -> str:
+    """Human label for a complaint-type slug."""
+    if slug == "other":
+        return "Outside these five types"
+    value = dims.get(slug)
+    return str(value["label"]) if value else slug.replace("_", " ").title()
+
+
 def _render_lender_report(label: dict) -> None:
     """One report card, one row per dimension, verdict first.
 
@@ -303,6 +397,8 @@ def _render_lender_report(label: dict) -> None:
             " this lender.</p></div>"
             "</li>"
         )
+
+    _render_composition(label)
 
     complaints = esc(plural(label["n_complaints"], "CFPB payday complaint"))
     st.html(
@@ -508,6 +604,20 @@ def _render_methodology() -> None:
             " numbers entered &mdash; not a quote, an offer, a rate comparison, or"
             " financial advice, and it ignores fees, missed payments and any rate"
             " change.</p>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("#### Why the composition is a bar, not a pie")
+        st.markdown(
+            '<p class="kyl-note">The five complaint types do not always account'
+            " for a lender's whole complaint file. Across the dataset they cover a"
+            " mean of 78%, and for a large minority of lenders most complaints"
+            " fall outside them. A pie chart requires its slices to sum to the"
+            " whole, so drawing these five as a full circle would assert that they"
+            " are the entire composition. The uncovered remainder is therefore"
+            " drawn as its own segment. A bar is also the honest form here because"
+            " the median lender has four of the five categories at zero, which"
+            " would make most pies a single slice.</p>",
             unsafe_allow_html=True,
         )
 
