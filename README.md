@@ -254,12 +254,19 @@ or into **Settings → Secrets** on Streamlit Community Cloud:
 ```toml
 [gemini]
 api_key = "PASTE_YOUR_KEY_HERE"
-# model = "gemini-3.8-flash"   # optional
+# model = "gemini-3.6-flash"   # optional
 ```
 
 For a local run without a secrets file, `GEMINI_API_KEY` or `GOOGLE_API_KEY` in
 the environment is equivalent. Create a key at
 <https://aistudio.google.com/apikey>.
+
+**Quota is the practical limit here.** The Gemini free tier allows 20
+`generate_content` requests per day, per model, per project. The household panel
+generates its analysis on page load, so a deployed app spends that in about 20
+views and then falls back to the deterministic text — silently, because that
+fallback is the designed behaviour. Enable billing if the model is meant to do
+real work; otherwise expect it to be used a few times an hour at best.
 
 The client is `google-genai`, the current GA SDK. (`google-generativeai` is the
 deprecated predecessor and is not used.) The SDK is imported lazily, so the app

@@ -139,11 +139,21 @@ class EchoModel:
 #: The model used when none is configured. Overridable via the ``gemini.model``
 #: secret, because model names move and this file should not have to.
 #:
-#: gemini-3.5-flash was the first choice and returned 503 UNAVAILABLE on every
-#: attempt against a live key -- "high demand", not an auth failure. gemini-3.6-flash
-#: and later respond. A flash model is deliberate: the reply is at most three
-#: sentences of panel text, and the guard rejects anything it did not ask for.
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+#: Model choice is currently dictated by quota, not quality. The Gemini free tier
+#: allows 20 generate_content requests per day per model per project, and the
+#: household panel generates its analysis on load, so a deployed app burns that in
+#: 20 page views. Observed against a live key:
+#:
+#:   gemini-3.5-flash      503 UNAVAILABLE, "high demand", on every attempt
+#:   gemini-3.8-flash      exhausted its 20/day
+#:   gemini-3.6-flash      this default; had headroom when checked
+#:
+#: A flash model is deliberate anyway: the reply is at most three sentences of
+#: panel text, and the guard rejects anything it did not ask for. If the deployed
+#: app is meant to serve real traffic, enable billing -- on the free tier it will
+#: spend its quota in minutes and fall back to the deterministic text, which is
+#: safe but means the model is effectively never used.
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 
 #: Read in this order by the SDK itself, but checked here too so a key is
 #: recognised the same way whether it came from a secret or the environment.
