@@ -437,6 +437,34 @@ a {{ color: {t['primary']}; }}
   .kyl-stats dd {{ text-align: left; padding: 0 0 .45rem; border-bottom: 1px solid {t['border']}; }}
 }}
 
+/* Verdict strip: one mark per complaint type.
+   A solid mark means the model can separate this lender from peers on that type
+   and a flat dash means it cannot. Direction is a glyph, not a hue, so the strip
+   never reads as a traffic light, and the sparseness of the data is the most
+   prominent thing about it. */
+.kyl-strip-head {{
+  font-size: .875rem; line-height: 1.5; color: {t['text']}; margin: 0 0 .5rem;
+}}
+.kyl-strip {{ display: flex; gap: .3rem; }}
+.kyl-mark-cell {{
+  flex: 1 1 0; min-width: 0; height: 2.1rem;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: {t['radius_sm']};
+  background: {t['bg']}; border: 1px solid {t['border']};
+  color: {t['border_strong']};
+}}
+/* Only a real finding gets emphasis. Everything else stays flat, so a strip with
+   three dashes in it looks like what it is: three dimensions we cannot call. */
+.kyl-mark-cell.is-signal {{
+  background: {t['primary_soft']}; border-color: #B9C6F5; color: {t['primary']};
+}}
+.kyl-mark-glyph {{ font-size: 1rem; line-height: 1; font-weight: 700; }}
+/* Available to assistive tech, invisible on screen: the glyph alone does not
+   say which complaint type or which direction. */
+.kyl-mark-visually-hidden {{
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}}
 /* Composition bar: share of a lender's complaints by type.
    A stacked bar, not a pie, because the median lender has four of the five
    categories at zero and because the five types do not always cover the whole

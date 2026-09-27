@@ -240,6 +240,168 @@ def _complaint_evidence_stats() -> dict[str, float] | None:
     }
 
 
+def _separable_summary(label: dict) -> dict[str, object]:
+    """How much the model can actually say about this lender, and in which direction.
+
+    This is the honest substitute for a grade. A grade would rank lenders on
+    quality; this ranks them on how much evidence supports a statement at all,
+    which is a fact about the data rather than about the lender.
+    """
+    counts = {"more": 0, "fewer": 0, "similar": 0}
+    for value in label["dimensions"].values():
+        counts[value["comparison"]] = counts.get(value["comparison"], 0) + 1
+    separable = counts["more"] + counts["fewer"]
+    if separable == 0:
+        direction = "not separable"
+    elif counts["more"] > counts["fewer"]:
+        direction = "more"
+    elif counts["fewer"] > counts["more"]:
+        direction = "fewer"
+    else:
+        direction = "mixed"
+    return {
+        "more": counts["more"],
+        "fewer": counts["fewer"],
+        "similar": counts["similar"],
+        "separable": separable,
+        "direction": direction,
+    }
+
+
+DIRECTION_GLYPH = {"more": "▲", "fewer": "▼", "similar": "–"}
+
+
+def _render_verdict_strip(label: dict) -> None:
+    """Five marks, one per dimension: is there a finding, and which way.
+
+    Direction is carried by a glyph and a word, not by colour, so the strip never
+    reads as a traffic light. A dimension the model cannot separate is drawn as a
+    flat dash, which means the sparseness of the data is the most visible thing
+    about the strip -- as it should be.
+    """
+    summary = _separable_summary(label)
+    cells = []
+    for value in label["dimensions"].values():
+        comparison = value["comparison"]
+        separable = comparison != "similar"
+        word = {
+            "more": "more complaints than peers",
+            "fewer": "fewer complaints than peers",
+            "similar": "not distinguishable from peers",
+        }[comparison]
+        cells.append(
+            f'<span class="kyl-mark-cell{" is-signal" if separable else ""}" '
+            f'title="{esc(value["label"])}: {esc(word)}">'
+            f'<span class="kyl-mark-glyph" aria-hidden="true">'
+            f"{DIRECTION_GLYPH[comparison]}</span>"
+            f'<span class="kyl-mark-visually-hidden">'
+            f'{esc(value["label"])}: {esc(word)}</span></span>'
+        )
+
+    # Build the plain sentence and the marked-up version separately, rather than
+    # stripping tags back out for the aria-label.
+    if summary["separable"] == 0:
+        plain = (
+            "No dimension is distinguishable from peers. For this lender the"
+            " complaint data supports no comparison in either direction."
+        )
+        headline = (
+            "<b>No dimension is distinguishable from peers.</b> For this lender"
+            " the complaint data supports no comparison in either direction."
+        )
+    else:
+        parts = []
+        if summary["more"]:
+            parts.append(f"more than peers on {summary['more']}")
+        if summary["fewer"]:
+            parts.append(f"fewer than peers on {summary['fewer']}")
+        joined = ", ".join(parts)
+        plain = f"Distinguishable on {summary['separable']} of 5 dimensions: {joined}."
+        headline = (
+            f"<b>Distinguishable on {summary['separable']} of 5 dimensions</b>"
+            f" &mdash; {joined}."
+        )
+
+    st.html(
+        f'<p class="kyl-strip-head">{headline}</p>'
+        f'<div class="kyl-strip" role="img" aria-label="{esc(plain)}">'
+        f'{"".join(cells)}</div>'
+        '<p class="kyl-fine">A solid mark with a direction means the model can'
+        " separate this lender from its peers on that complaint type. A dash means"
+        " it cannot, and carries no direction.</p>"
+    )
+
+
+def _render_comparison_table(lenders: list[dict], needle: str) -> None:
+    """Every lender, sortable, click to select. The cross-lender view.
+
+    A native st.dataframe so sorting, keyboard navigation and screen-reader
+    semantics come from the component rather than from anything hand-built.
+
+    The columns are deliberately evidentiary. Complaints is a count, not a rate:
+    without customer or loan-volume denominators a large lender will always look
+    worse, so this is never a quality measure and the caption says so.
+    """
+    rows = []
+    for row in lenders:
+        full = get_lender(row["id"])
+        if full is None:  # pragma: no cover
+            continue
+        summary = _separable_summary(full)
+        rows.append(
+            {
+                "id": row["id"],
+                "Lender": row["name"],
+                "Complaints": row["n_complaints"],
+                "Evidence": row["evidence"],
+                "Distinguishable": f"{summary['separable']} of 5",
+                "Direction": {
+                    "more": "More complaints than peers",
+                    "fewer": "Fewer complaints than peers",
+                    "mixed": "Mixed",
+                    "not separable": "—",
+                }[summary["direction"]],
+                "_sort_dist": summary["separable"],
+            }
+        )
+
+    frame = pd.DataFrame(rows)
+    if needle:
+        frame = frame[frame["Lender"].str.contains(needle, case=False, na=False)]
+    frame = frame.sort_values("Complaints", ascending=False).reset_index(drop=True)
+
+    st.html(
+        f'<p class="kyl-note" style="margin:.6rem 0 .3rem">'
+        f"{len(frame):,} of {len(lenders):,} lenders"
+        + (f' matching “{esc(needle)}”' if needle else "")
+        + ". Sort any column; select a row to load its profile.</p>"
+    )
+
+    st.dataframe(
+        frame.drop(columns=["_sort_dist"]),
+        hide_index=True,
+        width="stretch",
+        height=420,
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Lender": st.column_config.TextColumn("Lender", width="stretch"),
+            "Complaints": st.column_config.NumberColumn("Complaints", format="%d"),
+            "Evidence": st.column_config.TextColumn("Evidence"),
+            "Distinguishable": st.column_config.TextColumn("Distinguishable"),
+            "Direction": st.column_config.TextColumn("Direction"),
+        },
+    )
+    st.html(
+        '<p class="kyl-fine">Complaints is a count of consumer-submitted reports,'
+        " not a rate per customer, so it is not a quality measure: a larger lender"
+        " will usually have more. “Distinguishable” is the number of complaint"
+        " types the model can separate from peers with enough evidence to say"
+        " something, and most lenders have none.</p>"
+    )
+    return frame
+
+
 def _render_composition(label: dict) -> None:
     """Share of this lender's payday complaints by type, as a stacked bar.
 
@@ -398,6 +560,7 @@ def _render_lender_report(label: dict) -> None:
             "</li>"
         )
 
+    _render_verdict_strip(label)
     _render_composition(label)
 
     complaints = esc(plural(label["n_complaints"], "CFPB payday complaint"))
@@ -701,56 +864,49 @@ with lender_tab:
     lenders = lender_index()
     picked_id = st.session_state.get(LENDER_KEY)
 
-    # Search on the left, report on the right, so a profile and the control that
-    # produced it are visible at the same time and neither pushes the other down
-    # the page. Streamlit stacks the columns on narrow screens by itself.
+    # Search on the left, profile on the right, so a lender and the control that
+    # produced it are on screen together and neither pushes the other down the
+    # page. Streamlit stacks the columns on narrow screens by itself.
     search_col, report_col = st.columns([1, 2], gap="large")
 
     with search_col:
-        # A real search field. live=True commits 250ms after typing stops, so
-        # results narrow as the user types with no Enter and no dropdown to open.
-        # Capped at MAX_MATCHES, nothing shown before searching, and this one
-        # field is the only way in: retyping is how you change lenders.
+        # live=True commits 250ms after typing stops, so the table filters as the
+        # user types with no Enter. This one field is the only way in: retyping is
+        # how you change lenders.
         query = st.text_input(
             "Search for a lender",
             placeholder="Start typing a lender name…",
             key=f"{LENDER_KEY}_query",
             live=True,
         )
-        needle = query.strip().lower()
-        matches = [r for r in lenders if needle in r["name"].lower()] if needle else []
-
-        if needle and not matches:
+        needle = query.strip()
+        if not needle:
             st.html(
-                f'<p class="kyl-note" style="margin:.5rem 0 0">No lender matches'
-                f" <b>{esc(query.strip())}</b>. Try a shorter fragment.</p>"
+                '<p class="kyl-note" style="margin:.4rem 0 0">Showing all lenders.'
+                " Sort any column to compare them, or type to narrow.</p>"
             )
-        elif matches:
-            shown = matches[:MAX_MATCHES]
-            caption = (
-                f"{len(matches):,} matches — pick one"
-                if len(matches) > len(shown)
-                else "Pick one"
-            )
-            st.html(f'<p class="kyl-note" style="margin:.6rem 0 .35rem">{caption}</p>')
-            for row in shown:
-                if st.button(
-                    f"{row['name']}   ·   {plural(row['n_complaints'], 'complaint')}",
-                    key=f"{LENDER_KEY}_hit_{row['id']}",
-                    width="stretch",
-                    type="primary" if row["id"] == picked_id else "secondary",
-                ):
-                    st.session_state[LENDER_KEY] = row["id"]
-                    st.rerun()
+        frame = _render_comparison_table(lenders, needle)
+
+        # Row selection drives the profile. Falls back to the session value so a
+        # selection survives a rerun that did not come from the table.
+        if frame is not None and not frame.empty:
+            event = st.session_state.get(f"{LENDER_KEY}_table")
+            rows = []
+            try:
+                rows = event.selection.rows  # type: ignore[union-attr]
+            except Exception:
+                rows = []
+            if rows:
+                st.session_state[LENDER_KEY] = str(frame.iloc[rows[0]]["id"])
 
     with report_col:
         if picked_id is None:
             section_card(
                 "<h3>No lender selected</h3>"
-                '<p class="kyl-note">Search for a lender to see its complaint'
-                " profile. Each row is one complaint type, compared against modeled"
-                " payday peers. Hover a row for the numbers behind the verdict."
-                "</p>"
+                '<p class="kyl-note">Pick a row from the list, or search for a'
+                " lender, to see its complaint profile. Each row below is one"
+                " complaint type compared against modeled payday peers; hover a"
+                " row for the numbers behind the verdict.</p>"
             )
         else:
             label = get_lender(picked_id)
