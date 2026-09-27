@@ -66,7 +66,7 @@ _spec.loader.exec_module(_label_store)
 get_lender = _label_store.get_lender
 lender_index = _label_store.lender_index
 
-from kyl_theme import GRADE_STYLE, TOKENS, stylesheet  # noqa: E402
+from kyl_theme import TOKENS, stylesheet  # noqa: E402
 
 dataset_summary = _label_store.dataset_summary
 
@@ -82,29 +82,31 @@ except (OSError, ValueError):  # pragma: no cover
 
 SNAP_MODEL_PATH = "snap_xgboost.json"
 
-# Peer-anchored A-F bands, mirroring frontend/src/lib/grades.ts. Method C puts
-# a typical modelled payday peer at exactly 50, so 50 is the C/D boundary; the
-# remaining cuts sit in gaps in the observed distribution rather than at even
-# intervals. Across all 2,410 dimension-scores in the committed artifact that
-# gives A 18.3%, B 17.6%, C 34.7%, D 3.2%, E 5.8%, F 20.4%. Evenly spaced cuts
-# would put 72.9% of every dimension in F while the model itself calls 91% of
-# them indistinguishable from peers.
-#
-# These are relative, per-dimension bands. There is deliberately no overall
-# grade: the five dimensions overlap, so one number would hide that.
-GRADE_BANDS = [
-    (65.0, "A", "Much more favorable than modeled payday peers"),
-    (57.5, "B", "More favorable than modeled payday peers"),
-    (50.0, "C", "About average for modeled payday peers"),
-    (40.0, "D", "Somewhat less favorable than modeled payday peers"),
-    (30.0, "E", "Less favorable than modeled payday peers"),
-    (0.0, "F", "Much less favorable than modeled payday peers"),
-]
-
 COMPARISON_TEXT = {
-    "more": "More of these complaints than typical peers",
-    "fewer": "Fewer of these complaints than typical peers",
-    "similar": "Too close to typical peers to tell",
+    "more": "More complaints than typical peers",
+    "fewer": "Fewer complaints than typical peers",
+    "similar": "Similar to typical peers",
+}
+
+# What each comparison does and does not license us to say. The "similar" case
+# is the overwhelming majority of dimensions, and it is a statement that the
+# model found nothing rather than a middling score, so it is worded as such
+# rather than as a lukewarm verdict.
+COMPARISON_QUALIFIER = {
+    "more": (
+        "Available complaint data suggests this type of complaint makes up a"
+        " larger share of this lender's complaints than among typical payday-loan"
+        " peers."
+    ),
+    "fewer": (
+        "Available complaint data suggests this type of complaint makes up a"
+        " smaller share of this lender's complaints than among typical payday-loan"
+        " peers."
+    ),
+    "similar": (
+        "Available complaint data does not clearly distinguish this lender from"
+        " typical payday-loan peers."
+    ),
 }
 
 # The complete category set for each categorical feature, in the order xgboost
@@ -176,15 +178,6 @@ def plural(n: int, singular: str, plural_form: str | None = None) -> str:
     return f"{n:,} {word}"
 
 
-def grade_for(score: float) -> tuple[str, str]:
-    """Return ``(letter, descriptor)`` for a 0-100 score, clamping outliers."""
-    clamped = max(0.0, min(100.0, float(score)))
-    for minimum, letter, descriptor in GRADE_BANDS:
-        if clamped >= minimum:
-            return letter, descriptor
-    return "F", GRADE_BANDS[-1][2]
-
-
 def alert(kind: str, title: str, body: str) -> None:
     """A rendered alert.
 
@@ -201,65 +194,113 @@ def section_card(inner_html: str) -> None:
     st.html(f'<section class="kyl-card">{inner_html}</section>')
 
 
-def _render_lender_report(label: dict) -> None:
-    """One report card: five rows, subject left and grade right.
+def _complaint_evidence_stats() -> dict[str, float] | None:
+    """How much the complaint data actually supports, computed from the artifact.
 
-    Each row carries only the letter and the comparison sentence. The numbers
-    behind it live in an absolutely positioned overlay on hover or keyboard focus.
-    The overlay is absolutely positioned, which is the point: it takes no part in
-    layout, so revealing it cannot move the rows, the card, or anything below it.
+    These are the uncomfortable numbers, and they belong in front of a reader
+    rather than in a notebook. They are recomputed on every run so they cannot
+    drift away from the artifact they describe.
+
+    Deliberately reported as a median interval *width* in percentage points and
+    not as a ratio to the point estimate: where the estimated prevalence is near
+    zero, a ratio explodes arithmetically and would overstate the uncertainty.
+    """
+    try:
+        artifact = _label_store.load_artifact()
+    except Exception:  # pragma: no cover - artifact is committed
+        return None
+
+    dims = [
+        value
+        for lender in artifact["lenders"]
+        for value in lender["dimensions"].values()
+    ]
+    if not dims:  # pragma: no cover
+        return None
+
+    total = len(dims)
+    similar = sum(1 for d in dims if d["comparison"] == "similar")
+    thin = sum(1 for d in dims if d["complaints"] < 10)
+    complaints = sorted(d["complaints"] for d in dims)
+    mid = len(complaints) // 2
+    median_complaints = (
+        complaints[mid]
+        if len(complaints) % 2
+        else (complaints[mid - 1] + complaints[mid]) / 2
+    )
+    widths = sorted(
+        (d["prevalence_hi90"] - d["prevalence_lo90"]) * 100 for d in dims
+    )
+    return {
+        "dimensions": total,
+        "similar_pct": 100 * similar / total,
+        "thin_pct": 100 * thin / total,
+        "median_complaints": median_complaints,
+        "median_interval_width": widths[mid],
+    }
+
+
+def _render_lender_report(label: dict) -> None:
+    """One report card, one row per dimension, verdict first.
+
+    There is deliberately no letter grade. A grade says "this lender is good",
+    and nothing here supports that: the score is a peer-relative posterior whose
+    median dimension rests on zero observed complaints, and for 91% of
+    dimensions the model itself reports that it cannot distinguish the lender
+    from its peers. Banding that into A-F manufactured certainty the analysis
+    does not contain.
+
+    What each row does claim is narrower and supportable: whether this type of
+    complaint makes up a larger, smaller, or indistinguishable share of this
+    lender's payday complaints than among modeled peers. The Method C score is
+    kept, because it preserves information and gives the scale continuity, but
+    it is subordinate to the verdict and to the evidence behind it.
     """
     rows = []
     for dim in label["dimensions"].values():
-        letter, _descriptor = grade_for(dim["score"])
-        style = GRADE_STYLE[letter]
-        pct = min(100.0, max(0.0, dim["score"]))
         verdict = COMPARISON_TEXT[dim["comparison"]]
+        qualifier = COMPARISON_QUALIFIER[dim["comparison"]]
+        pct = min(100.0, max(0.0, dim["score"]))
 
         facts = [
             ("Raw score", f"{dim['score']:.1f} of 100"),
-            ("Complaints used", f"{dim['complaints']:,}"),
-            ("Estimated rate", f"{dim['prevalence'] * 100:.1f}%"),
+            ("Complaints in this category", f"{dim['complaints']:,}"),
+            ("Share of lender's complaints", f"{dim['prevalence'] * 100:.1f}%"),
             (
                 "90% credible interval",
                 f"{dim['prevalence_lo90'] * 100:.1f}"
                 f"\u2013{dim['prevalence_hi90'] * 100:.1f}%",
             ),
             ("Modeled peer rate", f"{dim.get('peer_rate', 0.0) * 100:.2f}%"),
-            ("Verdict", verdict),
         ]
         dl = "".join(f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in facts)
 
         scale = (
             '<div class="kyl-scale">'
             '<div class="kyl-scale-track">'
-            f'<span class="kyl-scale-fill" style="width:{pct:.1f}%;'
-            f'background:{style["fg"]}"></span>'
+            f'<span class="kyl-scale-fill" style="width:{pct:.1f}%"></span>'
             '<span class="kyl-scale-peer" style="left:50%"></span>'
             "</div>"
             '<div class="kyl-scale-legend">'
-            "<span>0 &middot; least favorable</span>"
-            "<span>peers sit at 50</span>"
-            "<span>100 &middot; most</span>"
-            "</div>"
-            "</div>"
+            "<span>0</span><span>modeled peers sit at 50</span><span>100</span>"
+            "</div></div>"
         )
 
         rows.append(
             '<li class="kyl-rowcard" tabindex="0" '
-            f'style="--kyl-edge:{style["fg"]}" '
-            f'aria-label="{esc(dim["label"])}: grade {letter}, {esc(verdict)}">'
-            "<div>"
-            f'<span class="kyl-rowcard-name">{esc(dim["label"])}</span>'
-            f'<span class="kyl-rowcard-cmp">{esc(verdict)}</span>'
-            "</div>"
-            '<div class="kyl-rowcard-grade">'
-            f'<span class="kyl-letter" style="color:{style["fg"]}">{letter}</span>'
-            "</div>"
-            f'<div class="kyl-rowcard-detail"><dl>{dl}</dl>{scale}'
-            "<p>Shrinkage pulls small samples toward the middle, so an extreme"
-            " score on thin evidence is not an extreme lender.</p>"
-            "</div>"
+            f'aria-label="{esc(dim["label"])}: {esc(verdict)}.">'
+            f'<p class="kyl-rowcard-name">{esc(dim["label"])}</p>'
+            '<div class="kyl-rowcard-main">'
+            f'<p class="kyl-rowcard-verdict">{esc(verdict)}</p>'
+            f"{scale}</div>"
+            '<p class="kyl-rowcard-meta">'
+            f'Score <b>{dim["score"]:.0f}</b> / 100'
+            f' &middot; {esc(label["evidence"])}</p>'
+            f'<p class="kyl-rowcard-qualifier">{esc(qualifier)}</p>'
+            f'<div class="kyl-rowcard-detail"><dl>{dl}</dl>'
+            "<p>Shrinkage pulls small samples toward the middle, so a score near"
+            " 50 on little data is mostly the prior rather than a finding about"
+            " this lender.</p></div>"
             "</li>"
         )
 
@@ -270,7 +311,7 @@ def _render_lender_report(label: dict) -> None:
         f'<h2 class="kyl-report-name">{esc(label["name"])}</h2>'
         f'<p class="kyl-meta" style="margin:.25rem 0 0">{complaints}</p>'
         "</div>"
-        f'<span class="kyl-badge">Evidence: {esc(label["evidence"])}</span>'
+        f'<span class="kyl-badge">{esc(label["evidence"])}</span>'
         "</header>"
         f'<ul style="list-style:none;margin:0;padding:0">{"".join(rows)}</ul>'
         "</article>"
@@ -339,13 +380,47 @@ def _render_methodology() -> None:
     Deliberately kept out of the three product tabs. Each of those answers one
     question and should read as a clean answer to it; the qualifications belong
     in one place a reader can choose to open.
+
+    The uncomfortable statistics lead. They are the reason the interface is
+    worded the way it is, and burying them would make the hedging look like a
+    disclaimer rather than as the finding.
     """
     st.html(
         '<div style="margin:1.5rem 0 1rem">'
         "<h2>Methodology</h2>"
-        '<p class="kyl-note">How each figure is produced, and what it does not'
-        " establish.</p></div>"
+        '<p class="kyl-note">How each figure is produced, what it supports, and'
+        " where it stops.</p></div>"
     )
+
+    stats = _complaint_evidence_stats()
+
+    if stats:
+        st.html(
+            '<section class="kyl-card">'
+            "<h3>What the complaint data can and cannot support</h3>"
+            '<p class="kyl-note">We set out to rate payday lenders from public'
+            " complaint data. For most dimensions it does not support a"
+            " distinction, and the interface is built to say so rather than to"
+            " paper over it.</p>"
+            '<dl class="kyl-stats">'
+            f"<dt>Comparisons that cannot distinguish a lender from its peers"
+            f"</dt><dd>{stats['similar_pct']:.1f}%</dd>"
+            f"<dt>Dimensions resting on fewer than 10 complaints</dt>"
+            f"<dd>{stats['thin_pct']:.1f}%</dd>"
+            f"<dt>Median complaints behind a single dimension score</dt>"
+            f"<dd>{stats['median_complaints']:.0f}</dd>"
+            f"<dt>Median width of the 90% credible interval</dt>"
+            f"<dd>{stats['median_interval_width']:.0f} percentage points</dd>"
+            "</dl>"
+            f'<p class="kyl-fine">Across all {int(stats["dimensions"]):,}'
+            " lender-dimension comparisons in the dataset. The median dimension"
+            " carries no observed complaints at all, so its score is almost"
+            " entirely the shrinkage prior rather than a finding about the"
+            " lender. This is why there is no letter grade anywhere in this"
+            " interface: a grade would assert a difference the data does not"
+            " support.</p>"
+            "</section>"
+        )
 
     left, right = st.columns(2, gap="large")
 
@@ -359,28 +434,32 @@ def _render_methodology() -> None:
             '<p class="kyl-note">Each dimension is scored 0&ndash;100 by Method C:'
             " a Beta-Binomial posterior for the lender's complaint rate, referenced"
             " to the fitted peer population for that complaint type. A typical peer"
-            " sits at <b>50</b>, which is why the bands on the report card are"
-            " anchored there and why the scale is marked at 50. Statistical"
-            " shrinkage pulls thin samples toward the middle, so an extreme score"
-            " on little evidence is not an extreme lender.</p>",
+            " sits at <b>50</b>, which is the tick marked on each scale."
+            " Statistical shrinkage pulls thin samples toward that reference, so a"
+            " score near 50 usually means little data rather than typical"
+            " behaviour.</p>",
             unsafe_allow_html=True,
         )
         st.markdown(
-            '<p class="kyl-note"><b>There is no overall grade.</b> The five'
-            " dimensions overlap, so a single number would hide that. Colour is"
-            " always paired with the letter and the comparison text, and is"
-            " relative to modeled peers &mdash; it is not a safety verdict. The"
-            " CFPB has not classified any lender as safe or unsafe, and neither"
-            " does this model.</p>",
+            '<p class="kyl-note">Each row reports one of three verdicts &mdash;'
+            " more complaints than typical peers, fewer, or similar &mdash; and"
+            " that verdict is the model's own, not a presentational choice. The"
+            " score is shown beneath it to preserve the information, but it is"
+            " model output on a peer-relative scale, not a grade, and it is not a"
+            " quality ranking of the lender. The CFPB has not classified any"
+            " lender as safe or unsafe, and neither does this model.</p>",
             unsafe_allow_html=True,
         )
         st.markdown(
             "**Evidence strength** describes how much complaint data supports the"
-            " grades, not how good or bad a lender is."
+            " scores for a lender as a whole, not how good or bad that lender is."
+            " More complaints usually means more customers, not more misconduct."
         )
         bands = "".join(
             f"<li>{esc(b['label'])} &mdash; {b['min_complaints']}+ complaints</li>"
-            for b in sorted(methodology["evidence_bands"], key=lambda b: b["min_complaints"])
+            for b in sorted(
+                methodology["evidence_bands"], key=lambda b: b["min_complaints"]
+            )
         )
         st.markdown(f"<ul>{bands}</ul>", unsafe_allow_html=True)
         st.markdown("**Caveats**")
@@ -389,7 +468,9 @@ def _render_methodology() -> None:
         st.markdown(
             f'<p class="kyl-fine">Method: {esc(summary["method"])}. Dataset:'
             f' {esc(summary["lender_count"])} lenders,'
-            f' {esc(summary["total_complaints"])} complaints.</p>',
+            f' {esc(summary["total_complaints"])} complaints. The five dimensions'
+            " overlap, which is why they are reported separately and never"
+            " combined into a single figure.</p>",
             unsafe_allow_html=True,
         )
 
@@ -459,7 +540,6 @@ def _render_methodology() -> None:
             " denominators are not available.</p>",
             unsafe_allow_html=True,
         )
-
 
 # --------------------------------------------------------------------------
 # Page shell
@@ -558,9 +638,9 @@ with lender_tab:
             section_card(
                 "<h3>No lender selected</h3>"
                 '<p class="kyl-note">Search for a lender to see its complaint'
-                " profile. Each row is one dimension, graded against modeled payday"
-                " peers. Hover a row for the numbers behind the grade. No grade is"
-                " an official safety verdict.</p>"
+                " profile. Each row is one complaint type, compared against modeled"
+                " payday peers. Hover a row for the numbers behind the verdict."
+                "</p>"
             )
         else:
             label = get_lender(picked_id)

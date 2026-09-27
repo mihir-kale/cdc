@@ -52,21 +52,6 @@ TOKENS = {
     ),
 }
 
-# Grade bands. Colour is never the only signal: every row also carries the letter
-# and the plain-English peer comparison, and the mapping is monotonic in severity.
-# Foreground/background pairs are all >= 4.5:1. There is deliberately no band
-# word ("Strong", "Weakest", ...): the letter plus the comparison sentence already
-# say it, and a third label was one more thing to read.
-GRADE_STYLE = {
-    "A": {"bg": "#ECFDF3", "fg": "#05603A", "edge": "#A9E5C3"},
-    "B": {"bg": "#ECFDF3", "fg": "#067647", "edge": "#A9E5C3"},
-    "C": {"bg": "#F2F4F7", "fg": "#344054", "edge": "#E4E7EC"},
-    "D": {"bg": "#FFFAEB", "fg": "#B54708", "edge": "#FEDF89"},
-    "E": {"bg": "#FEF0C7", "fg": "#93370D", "edge": "#FDB022"},
-    "F": {"bg": "#FEF3F2", "fg": "#B42318", "edge": "#FECDCA"},
-}
-
-
 def stylesheet() -> str:
     t = TOKENS
     return f"""
@@ -348,10 +333,8 @@ a {{ color: {t['primary']}; }}
   color: {t['text']}; margin: 0; overflow-wrap: anywhere; min-width: 0;
 }}
 .kyl-rowcard {{
-  position: relative; display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: .2rem 1rem; align-items: center;
-  padding: .8rem 1.25rem; border-bottom: 1px solid {t['border']};
+  position: relative; padding: .85rem 1.25rem;
+  border-bottom: 1px solid {t['border']};
 }}
 .kyl-rowcard:last-child {{ border-bottom: none; }}
 .kyl-rowcard:hover {{ background: {t['bg']}; }}
@@ -361,19 +344,32 @@ a {{ color: {t['primary']}; }}
 .kyl-rowcard-name {{
   display: block; font-size: .72rem; font-weight: 700; letter-spacing: .05em;
   text-transform: uppercase; color: {t['muted']}; line-height: 1.35;
+  margin: 0 0 .1rem;
 }}
-.kyl-rowcard-cmp {{
-  display: block; font-size: .925rem; line-height: 1.45; color: {t['text']};
-  margin-top: .1rem;
+/* The verdict leads. It is the only claim per row that the analysis supports,
+   so it gets the weight; the score is kept but deliberately quieter. */
+.kyl-rowcard-main {{
+  display: grid; grid-template-columns: minmax(0, 1fr) 150px;
+  gap: .2rem 1rem; align-items: center;
 }}
-.kyl-rowcard-grade {{ display: flex; align-items: center; gap: .5rem; }}
-.kyl-letter {{ font-size: 2.1rem; line-height: 1; font-weight: 700; }}
+.kyl-rowcard-verdict {{
+  font-size: 1rem; font-weight: 600; line-height: 1.4; color: {t['text']};
+  margin: 0;
+}}
+.kyl-rowcard-meta {{
+  font-size: .78rem; color: {t['muted']}; margin: .35rem 0 0;
+}}
+.kyl-rowcard-meta b {{ color: {t['text']}; font-weight: 600; }}
+.kyl-rowcard-qualifier {{
+  font-size: .8rem; line-height: 1.5; color: {t['muted']}; margin: .3rem 0 0;
+  max-width: 62ch;
+}}
 /* The hover overlay. */
 .kyl-rowcard-detail {{
   position: absolute; left: .6rem; right: .6rem; top: calc(100% - .3rem);
   z-index: 30; background: {t['card']};
   border: 1px solid {t['border_strong']};
-  border-left: 3px solid var(--kyl-edge, {t['primary']});
+  border-left: 3px solid {t['primary']};
   border-radius: {t['radius_sm']};
   box-shadow: 0 8px 24px rgba(16, 24, 40, .13);
   padding: .75rem .9rem;
@@ -393,12 +389,36 @@ a {{ color: {t['primary']}; }}
 .kyl-rowcard-detail dd {{
   margin: 0; color: {t['text']}; font-weight: 600; text-align: right;
 }}
-.kyl-rowcard-detail .kyl-scale {{ margin-top: .55rem; }}
 .kyl-rowcard-detail p {{ margin: .5rem 0 0; }}
 @media (max-width: 768px) {{
   .kyl-rowcard {{ padding: .75rem 1rem; }}
   .kyl-report-head {{ padding: 1rem; }}
   .kyl-rowcard-detail {{ left: .35rem; right: .35rem; }}
+  /* Stack the scale under the verdict on narrow screens rather than letting a
+     fixed 150px column squeeze the sentence. */
+  .kyl-rowcard-main {{ grid-template-columns: minmax(0, 1fr); }}
+}}
+
+/* The uncomfortable statistics, given as a definition list so the figure and
+   what it measures stay paired. */
+.kyl-stats {{
+  margin: .8rem 0 0; display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .1rem 1.2rem; align-items: baseline;
+}}
+.kyl-stats dt {{
+  font-size: .875rem; line-height: 1.5; color: {t['text']};
+  padding: .4rem 0; border-bottom: 1px solid {t['border']};
+}}
+.kyl-stats dd {{
+  margin: 0; font-size: 1.05rem; font-weight: 700; color: {t['text']};
+  font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+  padding: .4rem 0; border-bottom: 1px solid {t['border']};
+}}
+.kyl-stats dt:last-of-type, .kyl-stats dd:last-of-type {{ border-bottom: none; }}
+@media (max-width: 480px) {{
+  .kyl-stats {{ grid-template-columns: minmax(0, 1fr); gap: 0; }}
+  .kyl-stats dd {{ text-align: left; padding: 0 0 .45rem; border-bottom: 1px solid {t['border']}; }}
 }}
 
 /* Result readout after a successful estimate. */
