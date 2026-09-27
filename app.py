@@ -578,6 +578,15 @@ def _narrative_model():
     return None
 
 
+def _render_lender_heading(label: dict) -> None:
+    """Just the lender's name, so the analysis can sit directly under it."""
+    st.html(
+        '<header class="kyl-hero">'
+        f"<h2>{esc(label['name'])}</h2>"
+        "</header>"
+    )
+
+
 def _render_lender_report(label: dict) -> None:
     """The lender page, ordered as the product question is asked.
 
@@ -591,15 +600,10 @@ def _render_lender_report(label: dict) -> None:
     taxonomy = label.get("issues", {})
     sparse = total < 10
 
-    # --- 1. observed complaint profile: the hero ---
-    st.html(
-        '<header class="kyl-hero">'
-        f"<h2>What consumers report about {esc(label['name'])}</h2>"
-        f'<p class="kyl-hero-sub">Based on {esc(plural(total, "CFPB payday-loan complaint"))}'
-        " in our dataset.</p>"
-        "</header>"
-    )
-
+    # The name and its analysis are rendered by the caller, above this, so the
+    # interpretation sits directly under the lender it describes. The old
+    # "Based on N complaints in our dataset" line is gone because the evidence
+    # line below says the same thing with the band attached.
     if sparse:
         # Named suffix, not plural: assigning to `plural` anywhere in this
         # function makes it local for the whole function, so the plural() call
@@ -1235,8 +1239,11 @@ def _payoff_analysis(p: dict) -> str:
 _query_col, panels_col = st.columns([1, 2], gap="large")
 
 with _query_col:
+    # No top margin. The panels column starts with the first expander, which has
+    # none, so a margin here put the heading a line lower than the panel it sits
+    # beside. Both columns now begin at the same y.
     st.html(
-        '<div style="margin:1.5rem 0 .6rem">'
+        '<div class="kyl-prompt" style="margin:0 0 .6rem">'
         "<h2>Type in your offer</h2>"
         f'<p class="kyl-note">{esc(PLACEHOLDER)}</p>'
         "</div>"
@@ -1321,13 +1328,32 @@ with panels_col:
         "Lender Complaint Profile",
         expanded=bool(_route and PANEL_LENDER in _route.panels),
     ):
+        # Picking from the match list has to change what the field shows.
+        # Streamlit refuses a write to a widget's session value once the widget
+        # exists, so the field's key carries the pick: a new pick is a new key,
+        # which is a new widget created with the chosen name as its value.
+        if st.session_state.pop(f"{CHAT_KEY}_lender_pick", None) is not None:
+            st.session_state[f"{CHAT_KEY}_lender_pick_n"] = (
+                st.session_state.get(f"{CHAT_KEY}_lender_pick_n", 0) + 1
+            )
+        _pick_n = st.session_state.get(f"{CHAT_KEY}_lender_pick_n", 0)
+        _picked_name = st.session_state.get(f"{CHAT_KEY}_lender_picked_name", "")
+
         _manual_lender = st.text_input(
             "Lender name",
-            value=_route.lender_name or "" if _route and _route.has_lender else "",
+            value=_picked_name
+            or (_route.lender_name or "" if _route and _route.has_lender else ""),
             placeholder="Start typing a lender name",
-            key=f"{CHAT_KEY}_lender_manual_{_TOKEN}",
+            key=f"{CHAT_KEY}_lender_manual_{_TOKEN}_{_pick_n}",
         )
-        _from_query = bool(_route and _route.has_lender and _route.lender_name == _manual_lender)
+        if _picked_name:
+            # Consumed: the widget now holds it, so the seed is not needed again
+            # and a later rerun must not re-seed the field.
+            st.session_state.pop(f"{CHAT_KEY}_lender_picked_name", None)
+
+        _from_query = bool(
+            _route and _route.has_lender and _route.lender_name == _manual_lender
+        )
         _lender_id = _route.lender_id if (_route and _route.has_lender) else None
         if not _from_query and _manual_lender.strip():
             # find_lenders, not match_lenders_in_text. The field is a type-ahead,
@@ -1342,10 +1368,26 @@ with panels_col:
             elif len(_hits) > 1:
                 _lender_id = None
                 st.html(
-                    '<p class="kyl-note">More than one lender matches that'
-                    f" name: {esc(', '.join(h['name'] for h in _hits))}. Keep"
-                    " typing to narrow it down.</p>"
+                    '<p class="kyl-pick-head">Matches for '
+                    f"{esc(_manual_lender.strip())!r}</p>"
                 )
+                # The top three, as choices rather than a comma-separated list of
+                # names to compare by eye. Beyond three the list stops being a
+                # decision, and typing more narrows it anyway.
+                for _col, _hit in zip(
+                    st.columns(3), _hits[:3]
+                ):
+                    with _col:
+                        if st.button(
+                            _hit["name"],
+                            key=f"{CHAT_KEY}_pick_{_hit['id']}_{_pick_n}",
+                            width="stretch",
+                            help=f"{_hit['n_complaints']} complaints"
+                            f" · {_hit['evidence']}",
+                        ):
+                            st.session_state[f"{CHAT_KEY}_lender_pick"] = _hit["name"]
+                            st.session_state[f"{CHAT_KEY}_lender_picked_name"] = _hit["name"]
+                            st.rerun()
             else:
                 _lender_id = None
                 st.html(
@@ -1355,7 +1397,10 @@ with panels_col:
 
         _lender_label = get_lender(_lender_id) if _lender_id else None
         if _lender_label is not None:
-            _render_lender_report(_lender_label)
+            # Name, then the interpretation of it, then the evidence it rests on.
+            # The analysis belongs directly under the name it describes; at the
+            # bottom of the panel it read as a footnote to the bars.
+            _render_lender_heading(_lender_label)
             _analysis_box(
                 "lender",
                 _fingerprint(lender=_lender_id, n=_lender_label["n_complaints"]),
@@ -1367,6 +1412,7 @@ with panels_col:
                 # never go stale, which read as the cleared box being broken.
                 from_query=_from_query,
             )
+            _render_lender_report(_lender_label)
         else:
             st.html(
                 '<p class="kyl-note">Name a lender above, or in your query, to'

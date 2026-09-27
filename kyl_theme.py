@@ -449,7 +449,18 @@ padding: .4rem 0; border-bottom: 1px solid{t['border']};
   font-size: 1.6rem; font-weight: 700; letter-spacing: -.015em;
 color:{t['text']}; margin: 0; overflow-wrap: anywhere;
 }}
-.kyl-hero-sub{{ font-size: .95rem; color: {t['muted']}; margin: .3rem 0 0; }}
+/* The query column's heading has to start on the same line as the first panel
+   beside it. Streamlit puts ~19.92px of top margin on a bare h2 and its own rule
+   outranks the reset in this sheet, so the margin is zeroed here specifically
+   rather than across every heading, which would disturb the complaint detail
+   headings that rely on theirs. */
+.kyl-prompt h2{{ margin: 0 !important; }}
+
+/* Heading for the match list under the lender field. */
+.kyl-pick-head {{
+  font-size: .72rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color:{t['muted']}; margin: .5rem 0 .3rem;
+}}
 .kyl-evidence-line{{
 font-size: .95rem; color:{t['text']}; margin: .7rem 0 0;
 }}
