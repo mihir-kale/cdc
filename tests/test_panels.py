@@ -52,6 +52,47 @@ def text(at: AppTest) -> str:
     return _html.unescape(blob)
 
 
+class TestNoLeakedSource(unittest.TestCase):
+    """Streamlit 1.64 renders a bare string statement in a function body as
+    Markdown. A function that ends up with two docstrings therefore puts its
+    second one on the page, in the middle of the interface, with no error
+    anywhere. It happened once, so it is pinned.
+    """
+
+    def _app_path(self) -> Path:
+        return Path(__file__).resolve().parent.parent / "app.py"
+
+    def test_no_bare_string_statements_in_function_bodies(self) -> None:
+        import ast
+
+        tree = ast.parse(self._app_path().read_text(encoding="utf-8"))
+        offenders = []
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            # Index 0 is the docstring, which Streamlit does not render. Anything
+            # after it is a stray expression statement and does get rendered.
+            for i, stmt in enumerate(fn.body[1:], start=1):
+                if (
+                    isinstance(stmt, ast.Expr)
+                    and isinstance(stmt.value, ast.Constant)
+                    and isinstance(stmt.value.value, str)
+                ):
+                    offenders.append(f"{fn.name}:{stmt.lineno}")
+        self.assertEqual(offenders, [], f"bare strings render as Markdown: {offenders}")
+
+    def test_no_internal_docstrings_on_the_page(self) -> None:
+        at = run()
+        for token in (
+            "Takes survey codes",
+            "Split from the render",
+            "HTML-escape",
+            "inside the body",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, text(at))
+
+
 class TestLayout(unittest.TestCase):
     def test_starts_clean(self) -> None:
         at = run()

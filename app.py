@@ -731,12 +731,6 @@ def _household_facts(codes: dict) -> dict:
     Split from the render so the panel can decide what to show before it draws,
     and so the analysis box beside it can be given the same figures.
     """
-    """Household panel, read-only.
-
-    Takes survey codes straight from the query rather than from widgets. There is
-    no form here on purpose: the panel displays what the query established, so
-    a figure on screen is always a figure the user actually supplied.
-    """
     frame = pd.DataFrame([dict(codes)])
     for name, categories in CATEGORICAL_CATEGORIES.items():
         if name in frame.columns:
