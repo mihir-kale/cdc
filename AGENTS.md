@@ -11,7 +11,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py                      # product on :8501
 
-cd backend && python -m unittest discover -s ../tests    # 185 tests
+cd backend && python -m unittest discover -s ../tests    # 189 tests
 cd browser-checks && npm install && node verify-panels.mjs   # 32 checks, needs :8899
 ```
 

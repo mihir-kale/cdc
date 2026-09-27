@@ -131,7 +131,7 @@ in `.streamlit/config.toml`, which is what makes `static/` reachable at all.
 ### Verifying a change
 
 ```bash
-# 185 unit tests
+# 189 unit tests
 cd backend && python -m unittest discover -s ../tests
 
 # 32 real-browser checks against a running app
