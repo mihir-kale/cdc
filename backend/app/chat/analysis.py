@@ -226,8 +226,17 @@ def build_analysis(
             text=floor, generated=False, limit=lim, fallback_reason="model returned nothing"
         )
 
+    # The no-grade disclosure is checked against what the reader actually sees,
+    # which is the model prose plus the limit: Analysis.as_html() always renders
+    # the limit as its own paragraph, so the guarantee holds whatever the model
+    # wrote. Checking the model's text alone required it to reproduce a 47-word
+    # sentence verbatim, which no model reliably does -- with that check, the
+    # lender panel silently discarded every real model reply and showed the
+    # deterministic floor instead. The guarantee is unchanged and now actually
+    # about the rendered page.
+    rendered = f"{text} {lim}"
     checked = guard.check_reply(
-        text,
+        rendered,
         ["\n".join(lines)],
         sanctioned_numbers=_sanctioned(kind, facts),
         require_no_grade_disclosure=(kind == "lender"),
@@ -239,4 +248,8 @@ def build_analysis(
             limit=lim,
             fallback_reason=",".join(checked.violations),
         )
-    return Analysis(text=checked.text, generated=True, limit=lim)
+    # checked.text is the string that was passed in, which here is the combined
+    # rendered text -- so returning it would bake the limit into the prose and
+    # then as_html() would append the same limit again. The prose is the model's
+    # own text; the limit is rendered separately and unconditionally.
+    return Analysis(text=text, generated=True, limit=lim)

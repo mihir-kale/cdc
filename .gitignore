@@ -6,6 +6,12 @@
 # Streamlit secrets. secrets.toml.example is tracked; the real file is not.
 .streamlit/secrets.toml
 
+# A Google OAuth access token was committed here by accident on 2026-09-27
+# (commit 950cfe1). The file held a live bearer token in plain JSON. It is
+# ignored from here on; the copy in history needs scrubbing separately, and any
+# credential that shared that token should be treated as compromised.
+.cache
+
 # Python
 __pycache__/
 *.py[cod]

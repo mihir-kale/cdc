@@ -29,13 +29,38 @@ const check = (name, pass, detail = "") => {
   console.log(`  [${pass ? "PASS" : "FAIL"}] ${name}${detail ? `  ${detail}` : ""}`);
 };
 
-const waitApp = async (page) => {
-  await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout: 120000 });
+// Wait for the app to finish, not for a fixed interval.
+//
+// This used to sleep 1200ms after the masthead appeared, which is fine while a
+// render is fast. With a Gemini key configured a first render is not fast -- the
+// household panel generates its analysis on load, which is a live API call, and
+// the page was still rendering at 3s and settled at 5s. A fixed sleep then read
+// a half-rendered page and reported panels that were simply not up yet. Streamlit
+// publishes a status widget while a script run is in progress, so poll that
+// instead: it is correct whether or not a model is configured.
+const waitApp = async (page, { settle = 400, timeout = 120000 } = {}) => {
+  await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout });
   await page.waitForFunction(
     () => (document.body.innerText || "").includes("Know Your Loan"),
-    { timeout: 120000, polling: 500 },
+    { timeout, polling: 500 },
   );
-  await new Promise((r) => setTimeout(r, 1200));
+  const deadline = Date.now() + timeout;
+  // Wait for one quiet period: no run in progress, stable for `settle` ms.
+  let last = -1;
+  for (;;) {
+    const busy = await page.evaluate(
+      () => !!document.querySelector('[data-testid="stStatusWidget"]'),
+    );
+    if (!busy) {
+      if (last === -1) last = Date.now();
+      else if (Date.now() - last >= settle) break;
+    } else {
+      last = -1;
+    }
+    if (Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  await new Promise((r) => setTimeout(r, 300));
 };
 const txt = (page) => page.evaluate(() => document.body.innerText);
 const settle = (ms = 3000) => new Promise((r) => setTimeout(r, ms));

@@ -331,14 +331,61 @@ class TestGeminiClient(unittest.TestCase):
         self.assertIn("servicing", a.text)
         self.assertIn(a.limit, a.as_html())
 
-    def test_a_lender_reply_missing_the_disclosure_is_rejected(self) -> None:
-        # The same sentence without the disclosure is not enough.
+    def test_the_disclosure_is_required_on_the_page_not_from_the_model(self) -> None:
+        # The disclosure is fixed product copy that Analysis.as_html() always
+        # renders in its own paragraph, so the guarantee is about the page, not
+        # about the model reproducing 47 words verbatim. Requiring it inside the
+        # model's prose meant no real model reply was ever used.
         model, _ = self._model(
             "This lender's complaints lean towards servicing and payment handling."
         )
         a = build_analysis("lender", self.LENDER_FACTS, model=model)
+        self.assertTrue(a.generated, a.fallback_reason)
+        self.assertNotIn("not a grade", a.text)
+        self.assertEqual(a.as_html().count(a.limit), 1)
+        self.assertIn("no overall score for a lender", a.as_html())
+
+    def test_a_reply_that_grades_is_still_rejected_with_the_limit_present(self) -> None:
+        # Relaxing where the disclosure is checked must not weaken anything the
+        # guard is for.
+        model, _ = self._model(
+            "This lender is a predatory scam with a risk score of 12 out of 100."
+        )
+        a = build_analysis("lender", self.LENDER_FACTS, model=model)
         self.assertFalse(a.generated)
-        self.assertEqual(a.fallback_reason, "missing_disclosure")
+        self.assertIn("no overall score for a lender", a.as_html())
+
+    def test_a_transient_error_is_retried_then_raises(self) -> None:
+        from app.chat.model import _is_transient
+
+        class Err(Exception):
+            def __init__(self, code):
+                super().__init__(f"http {code}")
+                self.code = code
+
+        self.assertTrue(_is_transient(Err(503)))
+        self.assertTrue(_is_transient(Err(429)))
+        self.assertFalse(_is_transient(Err(400)))   # bad key: do not retry
+        self.assertFalse(_is_transient(Err(403)))   # forbidden: do not retry
+        self.assertFalse(_is_transient(Exception("x")))  # no status: do not retry
+
+    def test_retry_stops_after_max_attempts(self) -> None:
+        attempts = {"n": 0}
+
+        class Err(Exception):
+            code = 503
+
+        class Flaky:
+            @property
+            def models(self):
+                attempts["n"] += 1
+                raise Err("unavailable")
+
+        model = GeminiModel(api_key="k", client_factory=lambda: Flaky(),
+                            max_attempts=3, retry_backoff=0)
+        with self.assertRaises(Err):
+            model.complete([Turn(role="user", content="x")], [])
+        self.assertEqual(attempts["n"], 3)
 
 
 class TestGeminiKeyResolution(unittest.TestCase):

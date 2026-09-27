@@ -254,7 +254,7 @@ or into **Settings → Secrets** on Streamlit Community Cloud:
 ```toml
 [gemini]
 api_key = "PASTE_YOUR_KEY_HERE"
-# model = "gemini-3.5-flash"   # optional
+# model = "gemini-3.8-flash"   # optional
 ```
 
 For a local run without a secrets file, `GEMINI_API_KEY` or `GOOGLE_API_KEY` in

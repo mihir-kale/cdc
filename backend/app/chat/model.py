@@ -22,8 +22,11 @@ Swapping in a real client means implementing :class:`ChatModel` and constructing
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -135,7 +138,12 @@ class EchoModel:
 
 #: The model used when none is configured. Overridable via the ``gemini.model``
 #: secret, because model names move and this file should not have to.
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+#:
+#: gemini-3.5-flash was the first choice and returned 503 UNAVAILABLE on every
+#: attempt against a live key -- "high demand", not an auth failure. gemini-3.6-flash
+#: and later respond. A flash model is deliberate: the reply is at most three
+#: sentences of panel text, and the guard rejects anything it did not ask for.
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 
 #: Read in this order by the SDK itself, but checked here too so a key is
 #: recognised the same way whether it came from a secret or the environment.
@@ -153,6 +161,26 @@ def gemini_key_from_env() -> str | None:
         if value:
             return value
     return None
+
+
+#: HTTP statuses worth retrying. 429 is quota/throughput, 503 is capacity.
+_TRANSIENT_STATUS = frozenset({429, 503})
+
+
+def _is_transient(exc: Exception) -> bool:
+    """True for a capacity or rate-limit failure, False for anything real.
+
+    An invalid key is a 400 and must not be retried, and a prompt blocked by
+    safety filters is not an error at all -- retrying either just delays the
+    deterministic fallback the caller falls back to anyway.
+    """
+    status = getattr(exc, "code", None)
+    if status is None:
+        return False
+    try:
+        return int(status) in _TRANSIENT_STATUS
+    except (TypeError, ValueError):
+        return False
 
 
 def resolve_gemini_config(secret_table: dict[str, Any] | None = None) -> dict | None:
@@ -205,19 +233,61 @@ class GeminiModel:
     model: str = DEFAULT_GEMINI_MODEL
     temperature: float = 0.2
     max_output_tokens: int = 800
+    #: Short retries for capacity blips. Live testing returned 503 UNAVAILABLE
+    #: ("high demand") intermittently against a valid key, including on models
+    #: that succeeded moments earlier, so a single attempt was not a reliable
+    #: test of whether the model is reachable. Deliberately small and bounded:
+    #: the call site falls back to deterministic text on any failure, so waiting
+    #: longer than this only delays the page.
+    #: Small on purpose. A Streamlit render is serial -- one panel blocks the
+    #: next -- so a retry budget that looks reasonable in isolation multiplies by
+    #: the number of panels. Measured: three attempts with 1.5s backoff held the
+    #: page for over four seconds per panel against a rate-limited key.
+    max_attempts: int = 2
+    retry_backoff: float = 1.0
+    #: Hard ceiling on one request, in milliseconds. Without it a slow call
+    #: holds the whole page rather than one panel, because Streamlit renders
+    #: panels in series and there is no other thread to answer on.
+    timeout_ms: int = 15000
+    #: Replies are keyed by their prompt and reused. Without this every Streamlit
+    #: rerun re-called the API for text it had already generated: a repeated
+    #: identical query measured 7.6s. A panel's figures are deterministic for a
+    #: given state, so the same prompt can only produce the same passage.
+    cache_size: int = 128
     #: Injected in tests. Defaults to a real client built from ``api_key``.
     client_factory: Any = None
+    #: Built on first use and reused; see :meth:`_client`.
+    _client_obj: Any = field(default=None, repr=False)
+    #: prompt -> reply. Bounded, insertion-ordered, dropped oldest first.
+    _cache: "OrderedDict[str, str]" = field(default_factory=OrderedDict, repr=False)
 
     def _client(self) -> Any:
+        """The SDK client, built once and reused.
+
+        Cached because building one per call is not merely wasteful: the SDK
+        closes its HTTP transport when a client is discarded, and a second
+        request through a fresh client in the same session fails with
+        "Cannot send a request, as the client has been closed."
+        """
+        if self._client_obj is not None:
+            return self._client_obj
         if self.client_factory is not None:
-            return self.client_factory()
+            self._client_obj = self.client_factory()
+            return self._client_obj
         try:
             from google import genai  # noqa: PLC0415 -- deliberate lazy import
         except ImportError as exc:  # pragma: no cover - depends on the env
             raise RuntimeError(
                 "google-genai is not installed. Run: pip install google-genai"
             ) from exc
-        return genai.Client(api_key=self.api_key)
+        # Imported here with the SDK, for the same lazy reason.
+        from google.genai import types  # noqa: PLC0415
+
+        self._client_obj = genai.Client(
+            api_key=self.api_key,
+            http_options=types.HttpOptions(timeout=self.timeout_ms),
+        )
+        return self._client_obj
 
     def complete(
         self,
@@ -231,15 +301,40 @@ class GeminiModel:
         prompt = "\n\n".join(
             f"[{t.role}{'/' + t.name if t.name else ''}]\n{t.content}" for t in turns
         )
-        response = self._client().models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config={
-                "temperature": self.temperature,
-                "max_output_tokens": self.max_output_tokens,
-            },
-        )
-        return (getattr(response, "text", "") or "").strip()
+        cache_key = hashlib.sha256(
+            f"{self.model}|{self.temperature}|{self.max_output_tokens}|{prompt}".encode()
+        ).hexdigest()
+        if cache_key in self._cache:
+            self._cache.move_to_end(cache_key)
+            return self._cache[cache_key]
+
+        last: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = self._client().models.generate_content(
+                    model=self.model,
+                    contents=prompt,
+                    config={
+                        "temperature": self.temperature,
+                        "max_output_tokens": self.max_output_tokens,
+                    },
+                )
+            except Exception as exc:
+                last = exc
+                if not _is_transient(exc) or attempt == self.max_attempts:
+                    raise
+                time.sleep(self.retry_backoff * attempt)
+                continue
+            text = (getattr(response, "text", "") or "").strip()
+            # An empty reply is not cached. It means the model declined or was
+            # cut off, and caching that would suppress a retry on the next rerun
+            # when it may well have succeeded.
+            if text:
+                self._cache[cache_key] = text
+                while len(self._cache) > self.cache_size:
+                    self._cache.popitem(last=False)
+            return text
+        raise last or RuntimeError("unreachable")  # pragma: no cover
 
 
 def render_transcript(turns: list[Turn]) -> str:
