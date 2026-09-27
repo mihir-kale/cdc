@@ -146,14 +146,17 @@ def _floor_text(kind: str, facts: dict[str, Any]) -> str:
         )
     band = facts.get("band_label")
     pct = facts.get("percentile")
-    if not band:
+    if not band or pct is None:
         return (
             "Not enough of a household profile was given to place it against the "
             "survey data."
         )
+    # The band sentence already says "than most surveyed households", so it is
+    # appended rather than interpolated into "sit in the ...", which produced
+    # "sit in the higher financial strain than most surveyed households".
     return (
-        f"Households with a profile like yours sit in the {str(band).lower()}, at "
-        f"the {pct}th percentile of the survey reference distribution."
+        f"Your household sits at the {pct}th percentile of the surveyed "
+        f"population \u2014 {str(band).lower()}."
     )
 
 

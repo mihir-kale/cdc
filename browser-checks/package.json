@@ -1,0 +1,12 @@
+{
+  "name": "know-your-loan-browser-checks",
+  "private": true,
+  "type": "module",
+  "description": "Real-Chrome checks for the Streamlit interface in ../app.py. Not shipped.",
+  "scripts": {
+    "verify": "node verify-panels.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}

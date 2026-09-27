@@ -45,23 +45,53 @@ PANEL_METHOD = "methodology"
 PANELS = (PANEL_LENDER, PANEL_PAYOFF, PANEL_HOUSEHOLD, PANEL_METHOD)
 
 # Survey codebook, restated here so the router can map a typed range onto the
-# same codes the Household tab used. Kept in step with financial_impact.
+# same codes the Household panel uses. These MUST track
+# financial_impact.AGE_BANDS; tests/test_chat.py asserts the two agree.
+#
+# All eight bands are reachable, and each maps to a distinct code. An earlier
+# version listed only six patterns: codes 7 ("70-74") and 8 ("75 or older") were
+# unreachable, and "62-69" and "70-74" shared one pattern, so a household that
+# said it was 72 was coded as 62-69 and the panel opened showing the wrong
+# band. Ranges are still what is matched, as before -- a bare "I'm 35" has
+# never resolved, and widening that is a separate decision.
 AGE_RANGES: tuple[tuple[str, int], ...] = (
-    (r"1[8-9]\s*-\s*2[0-4]|under\s*25|18-24", 1),
+    # "20-24" belongs to this band too; the pattern previously only accepted a
+    # range *starting* at 18 or 19, so the most obvious way to type the youngest
+    # band did not resolve.
+    (r"1[8-9]\s*-\s*2[0-4]|2[0-4]\s*-\s*2[0-4]|under\s*25|18-24|20-24", 1),
     (r"2[5-9]\s*-\s*3[0-4]", 2),
     (r"3[5-9]\s*-\s*4[0-4]", 3),
     (r"4[5-9]\s*-\s*5[0-9]|5[0-4]\s*-\s*5[0-9]", 4),
-    (r"5[5-9]\s*-\s*6[0-9]|6[0-1]\s*-\s*6[0-9]", 5),
-    (r"6[2-9]\s*-\s*6[0-9]|7[0-4]\s*-\s*7[0-4]", 6),
+    (r"5[5-9]\s*-\s*6[0-1]|5[5-9]\s*-\s*5[0-9]", 5),
+    (r"6[2-9]\s*-\s*6[0-9]", 6),
+    (r"7[0-4]\s*-\s*7[0-4]", 7),
+    (r"7[5-9]\s*-\s*[89][0-9]|8[0-9]\s*-\s*[89][0-9]|9[0-9]\s*-\s*[89][0-9]"
+     r"|over\s*75|75\s*or\s*older", 8),
 )
+# One pattern per codebook band, tested from the top down, because the bands are
+# identified by the leading digits of whichever income figure was typed.
+#
+# These were badly misaligned with financial_impact.INCOME_BANDS. The old set had
+# seven patterns for nine bands, so "$75,000 to $99,999" and "$150,000 or more"
+# were unreachable, and the ones that existed were shifted: "income 120k" was
+# coded 6 ($60,000-$74,999) and "income 180k" was coded 8, neither of which is
+# the band those numbers fall in.
 INCOME_RANGES: tuple[tuple[str, int], ...] = (
-    (r"(?:under|less\s+than)\s*\$?\s*2[0-5](?:,?000|k)\b", 1),
-    (r"\$?\s*2[0-9](?:,?000|k)\s*(?:to|-|and)\s*\$?\s*3[0-4](?:,?000|k)\b|\b20s\b", 2),
-    (r"\$?\s*3[0-9](?:,?000|k)\s*(?:to|-|and)\s*\$?\s*4[0-9](?:,?000|k)\b|\b(?:30|40)s\b", 3),
-    (r"\$?\s*[45][0-9](?:,?000|k)\s*(?:to|-|and)\s*\$?\s*[56][0-9](?:,?000|k)\b|\b(?:50|60)s\b", 4),
-    (r"\$?\s*[67][0-9](?:,?000|k)\s*(?:to|-|and)\s*\$?\s*8[0-9](?:,?000|k)\b|\b(?:70|80)s\b", 5),
-    (r"\$?\s*(?:9[0-9]|1[0-4][0-9])(?:,?000|k)\b|\b(?:90|100)s\b", 6),
-    (r"\$?\s*1[5-9][0-9](?:,?000|k)\b|over\s*150", 8),
+    # "under 20k" is checked first, ahead of the 20k band itself: "under 20k"
+    # contains "20k", and since the bands are tried top down, band 2 would
+    # otherwise claim it and report a sub-$20,000 household as $20,000+.
+    (r"(?:under|less\s+than)\s*\$?\s*(?:1[0-9]|20)(?:,?000|,?999|k)?\b", 1),
+    (r"\$?\s*(?:1[5-9][0-9]|[2-9][0-9]{2})(?:,?000|k)\b|over\s*\$?\s*1[45]0|\b150s\b", 9),
+    (r"\$?\s*1[0-4][0-9](?:,?000|k)\b|\b1[0-4]0s\b", 8),
+    # ,999 as well as ,000: the band runs to $99,999, so a typed "99,999" has to
+    # land here rather than fall through.
+    (r"\$?\s*(?:7[5-9]|8[0-9]|9[0-9])(?:,?000|,?999|k)\b|\b[789]0s\b", 7),
+    (r"\$?\s*(?:6[0-9]|7[0-4])(?:,?000|k)\b|\b60s\b", 6),
+    (r"\$?\s*5[0-9](?:,?000|k)\b|\b50s\b", 5),
+    (r"\$?\s*4[0-9](?:,?000|k)\b|\b40s\b", 4),
+    (r"\$?\s*3[0-9](?:,?000|k)\b|\b30s\b", 3),
+    (r"\$?\s*2[0-9](?:,?000|k)\b|\b20s\b", 2),
+    (r"\$?\s*1[0-9](?:,?000|,?999|k)\b|\b1[0-9]k\b", 1),
 )
 EDUCATION_RANGES: tuple[tuple[str, int], ...] = (
     (r"less\s+than\s+high\s*school|no\s+high\s*school", 1),

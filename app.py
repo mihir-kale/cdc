@@ -1,4 +1,5 @@
-"""Know Your Loan — a Streamlit front end for the FinePrint analysis.
+"""Know Your Loan — a consumer tool for payday loans, built on the CFPB
+complaint and financial-wellbeing analysis in `backend/`.
 
 Three tools, deliberately kept apart because they answer different questions
 from different data:
@@ -37,9 +38,7 @@ import json
 import sys
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
-import xgboost as xgb
 
 _BACKEND = Path(__file__).resolve().parent / "backend"
 
@@ -108,6 +107,31 @@ from kyl_theme import TOKENS, stylesheet  # noqa: E402
 
 dataset_summary = _label_store.dataset_summary
 
+# The household model is loaded by path for the same reason label_store is: the
+# name `app` is already taken by this script in Streamlit's runtime. More to the
+# point, this module is the single source of truth for the survey codebook, the
+# feature order and the inference path, so the panel and the FastAPI service
+# cannot drift apart. An earlier version of this file declared its own category
+# sets and loaded the eight-feature prototype artifact, which meant it was
+# scoring a different model from the one the API serves, with the child and
+# county-poverty features pinned to constants because the form never collected
+# them. Everything below now comes from here instead.
+_fi_spec = importlib.util.spec_from_file_location(
+    "kyl_financial_impact", _BACKEND / "app" / "financial_impact.py"
+)
+_fi = importlib.util.module_from_spec(_fi_spec)
+_fi_spec.loader.exec_module(_fi)
+
+_INPUT_OPTIONS = _fi.INPUT_OPTIONS
+_CHILD_FIELDS = _fi.CHILD_INPUT_FIELDS
+_AGE_BANDS = _fi.AGE_BANDS
+_EDUCATION = _fi.EDUCATION_LEVELS
+_INCOME = _fi.INCOME_BANDS
+_MARITAL = _fi.MARITAL_STATUS
+_SIZES = _fi.HOUSEHOLD_SIZES
+_METRO = _fi.METRO_STATUS
+_POVERTY = _fi.COUNTY_POVERTY_SHARE
+
 _HOUSEHOLD_CONTEXT_PATH = _BACKEND / "app" / "generated" / "financial_impact_context.json"
 try:
     _HOUSEHOLD_CONTEXT = json.loads(_HOUSEHOLD_CONTEXT_PATH.read_text(encoding="utf-8"))
@@ -117,12 +141,6 @@ except (OSError, ValueError):  # pragma: no cover
 # --------------------------------------------------------------------------
 # Data and model constants. Unchanged from the previous version on purpose.
 # --------------------------------------------------------------------------
-
-# Anchored to this file, not the working directory. A bare relative path only
-# resolved because the app happened to be launched from the repo root, and the
-# household panel now scores on every run rather than after a form submit, so a
-# wrong CWD made xgboost load nothing and abort the process rather than raise.
-SNAP_MODEL_PATH = str(Path(__file__).resolve().parent / "snap_xgboost.json")
 
 COMPARISON_TEXT = {
     "more": "More complaints than typical peers",
@@ -151,47 +169,13 @@ COMPARISON_QUALIFIER = {
     ),
 }
 
-# The complete category set for each categorical feature, in the order xgboost
-# saw them at training time. Declared explicitly because a bare
-# astype("category") on a one-row frame derives its categories from that single
-# row, so a household aged 45-54 would be sent as category code 0 and silently
-# route the prediction through the wrong branch of every categorical split.
-# Same constant and same reasoning as backend/app/financial_impact.py.
-CATEGORICAL_CATEGORIES = {
-    "agecat": [1, 2, 3, 4, 5, 6, 7, 8],
-    "PPEDUC": [1, 2, 3, 4, 5],
-    "PPINCIMP": [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    "PPMARIT": [1, 2, 3, 4, 5],
-    "PPMSACAT": [0, 1],
-}
-
-AGE_BANDS = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+", "75+"]
-EDUCATION = [
-    "Less than High School",
-    "High School",
-    "Associate's Degree",
-    "Bachelor's Degree",
-    "Graduate or Professional Degree",
-]
-INCOME = [
-    "Less than $20,000",
-    "$20,000 to $29,999",
-    "$30,000 to $39,999",
-    "$40,000 to $49,999",
-    "$50,000 to $59,999",
-    "$60,000 to $74,999",
-    "$75,000 to $99,999",
-    "$100,000 to $149,999",
-    "$150,000 or more",
-]
-MARITAL = [
-    "Married",
-    "Widowed",
-    "Divorced/Separated",
-    "Never married",
-    "Living with partner",
-]
-METRO = ["Yes", "No"]
+# The survey codebook (age bands, education, income, marital status, household
+# size, metro status, county poverty share) and the four child age bands are
+# read from financial_impact.py above rather than restated here. They used to
+# be duplicated, and the copies had drifted: the local age bands read
+# "55-64", "65-74", "75+", "75+" where the survey actually declares "55-61",
+# "62-69", "70-74" and "75 or older", so the form offered age ranges that do
+# not exist in the training data and mislabelled the code it sent.
 
 LENDER_KEY = "kyl_lender"
 # Search results shown at once. Small enough to stay above the fold, so the
@@ -373,136 +357,7 @@ def _render_verdict_strip(label: dict) -> None:
     )
 
 
-def _lender_matches(lenders: list[dict], needle: str) -> list[dict]:
-    """Lenders whose name contains the search text, best fragment first.
-
-    A prefix match is a better answer than a match buried mid-name, so prefix hits
-    sort ahead of the rest. Within each group the name is sorted alphabetically, so
-    the list is never a ranking and never looks like one.
-    """
-    if not needle:
-        return []
-    lowered = needle.lower()
-    hits = [r for r in lenders if lowered in r["name"].lower()]
-    hits.sort(key=lambda r: (not r["name"].lower().startswith(lowered), r["name"]))
-    return hits
-
-
-def _render_lender_picker(lenders: list[dict], needle: str, picked_id: str | None) -> None:
-    """A search field and a short list of lenders to click.
-
-    This is a lookup control, not a table of results. There is no grid, no
-    sortable column and no checkbox: a grid of rows with checkboxes asks the user
-    to read a comparison they are not here for, and a sortable numeric column is
-    one click away from looking like a ranking. A lender's name and complaint count
-    are what someone actually scans for, so those are the whole button.
-    """
-    if not needle:
-        st.html(
-            '<p class="kyl-note" style="margin:.5rem 0 0">Type a lender name to'
-            " begin. There is no browse list, because a list of 482 lenders is not"
-            " a way to find one.</p>"
-        )
-        return
-
-    matches = _lender_matches(lenders, needle)
-    if not matches:
-        st.html(
-            f'<p class="kyl-note" style="margin:.5rem 0 0">No lender matches'
-            f" <b>{esc(needle)}</b>. Try a shorter fragment of the name.</p>"
-        )
-        return
-
-    shown = matches[:MAX_MATCHES]
-    st.html(
-        '<p class="kyl-note" style="margin:.6rem 0 .35rem">'
-        + (
-            f"{len(matches):,} match{'es' if len(matches) != 1 else ''},"
-            f" showing {len(shown)} &mdash; pick one:"
-            if len(matches) > len(shown)
-            else f"{len(matches):,} match"
-            f"{'es' if len(matches) != 1 else ''} &mdash; pick one:"
-        )
-        + "</p>"
-    )
-    for row in shown:
-        if st.button(
-            f"{row['name']}&nbsp;&nbsp;&middot;&nbsp;&nbsp;"
-            f"{plural(row['n_complaints'], 'complaint')}",
-            key=f"{LENDER_KEY}_hit_{row['id']}",
-            width="stretch",
-            type="primary" if row["id"] == picked_id else "secondary",
-            help=f"{row['evidence']} in the dataset",
-        ):
-            # No st.rerun() here. A button click already triggers a run, and
-            # calling rerun() from inside the render loop throws away the rest of
-            # the page mid-draw. The assignment lands in session state, the report
-            # below reads it back, and the highlight appears on the next run that
-            # the click itself causes.
-            st.session_state[LENDER_KEY] = row["id"]
-
-    st.html(
-        '<p class="kyl-fine">Listed by name, not by any measure of quality. The'
-        " complaint count is consumer-submitted reports in our dataset, not a rate"
-        " per customer, so it is not a quality measure and a larger lender will"
-        " usually have more. This list is for finding a lender, not ranking"
-        " one.</p>"
-    )
-
-
 CHAT_KEY = "kyl_chat"
-
-
-def _household_profile() -> dict:
-    """The Household tab's current selections, as survey codes.
-
-    Read from session state rather than from the widgets, so the assistant works
-    even when its own tab is the one on screen and the Household tab's widgets
-    were never rendered this run.
-    """
-    out: dict = {}
-    for field, key in (
-        ("age_band", "kyl_age_band"),
-        ("education", "kyl_education"),
-        ("household_income", "kyl_income"),
-        ("marital_status", "kyl_marital"),
-        ("household_size", "kyl_household_size"),
-        ("metro_area", "kyl_metro"),
-        ("county_poverty_share", "kyl_county_poverty"),
-    ):
-        if key in st.session_state and st.session_state[key] is not None:
-            out[field] = st.session_state[key]
-    return out if len(out) == 7 else {}
-
-
-def _render_briefing(reply) -> None:
-    """One pasted offer and its briefing, section by section.
-
-    Emitted as a single st.html call. Splitting the wrapper across several calls
-    leaves Streamlit to auto-close the unclosed div, which renders as an empty
-    bordered box above the content.
-    """
-    b = getattr(reply, "briefing", None)
-    parts = ['<div class="kyl-chat">']
-    if b is not None:
-        for section in b.sections:
-            if section.empty and not section.lines:
-                continue
-            parts.append(f'<p class="kyl-chat-h">{esc(section.heading)}</p>')
-            parts.extend(
-                f'<p class="kyl-note">{esc(line)}</p>' for line in section.lines
-            )
-            if section.note:
-                parts.append(f'<p class="kyl-fine">{esc(section.note)}</p>')
-        if b.needs:
-            parts.append(
-                '<p class="kyl-chat-needs">Still needed: '
-                f"{esc('; '.join(b.needs))}.</p>"
-            )
-    else:
-        parts.append(f'<p class="kyl-note">{esc(reply.text)}</p>')
-    parts.append("</div>")
-    st.html("".join(parts))
 
 
 PEER_WORDING = {
@@ -700,7 +555,7 @@ def _complaint_detail(row: dict, taxonomy: dict) -> str:
     if row["slug"] == "other":
         parts.append(
             '<p class="kyl-fine">These complaints sit outside the five types'
-            " FinePrint scores separately, so no peer comparison is made for"
+            " Know Your Loan scores separately, so no peer comparison is made for"
             " them.</p>"
         )
         return "".join(parts)
@@ -725,62 +580,65 @@ def _complaint_detail(row: dict, taxonomy: dict) -> str:
 
 
 
-def _household_facts(codes: dict) -> dict:
+def _household_facts(inputs: dict) -> dict:
     """Score a household profile without drawing anything.
 
     Split from the render so the panel can decide what to show before it draws,
     and so the analysis box beside it can be given the same figures.
+
+    The call goes through financial_impact.household_context, which is the same
+    entry point the FastAPI service uses, so the feature order, the categorical
+    category sets and the artifact are shared rather than restated. Percentile
+    and band come back already computed; this function only reshapes them for
+    the panel and keeps the raw rate for the model detail disclosure.
     """
-    frame = pd.DataFrame([dict(codes)])
-    for name, categories in CATEGORICAL_CATEGORIES.items():
-        if name in frame.columns:
-            frame[name] = pd.Categorical(frame[name], categories=categories)
-
-    booster = xgb.Booster()
-    booster.load_model(SNAP_MODEL_PATH)
-    rate = float(booster.predict(xgb.DMatrix(frame, enable_categorical=True))[0])
-
-    pct = rate * 100
-    if pct >= 65:
-        band = "Higher strain"
-        reading = (
-            "Households with these characteristics more often reported receiving"
-            " SNAP benefits in the survey than the modeled peer group."
-        )
-    elif pct >= 35:
-        band = "Typical strain"
-        reading = (
-            "Households with these characteristics reported receiving SNAP benefits"
-            " at roughly the rate of the modeled peer group."
-        )
-    else:
-        band = "Lower strain"
-        reading = (
-            "Households with these characteristics less often reported receiving"
-            " SNAP benefits in the survey than the modeled peer group."
-        )
-
-    year = _HOUSEHOLD_CONTEXT.get("survey_year", "a national")
+    ctx = _fi.household_context(inputs)
+    rate = float(ctx["model_association_rate"])
     return {
-        "rate": pct,
-        "band": band,
-        "band_label": f"{band} than most surveyed households",
-        "reading": reading,
-        "year": year,
+        "rate": rate * 100,
+        "percentile": ctx.get("survey_percentile"),
+        "band": ctx.get("band_label", ""),
+        "summary": ctx.get("summary", ""),
+        "caveats": ctx.get("caveats", []),
+        "year": _HOUSEHOLD_CONTEXT.get("survey_year", "a national"),
     }
 
 
 def _render_household(f: dict) -> None:
-    """The household panel, read-only."""
-    pct, band, reading, year = f["rate"], f["band"], f["reading"], f["year"]
+    """The household panel, read-only.
+
+    The headline is the percentile within the survey, not the association rate.
+    A 2016 survey association is easy to over-read as a personal forecast, and a
+    percentage invites exactly that reading; "82nd of 6,394 surveyed
+    households" does not. The rate itself is what the model actually outputs, so
+    it is kept and shown -- but only behind a disclosure, as a technical detail.
+    """
+    pctile, band, summary, year = f["percentile"], f["band"], f["summary"], f["year"]
+    caveats = f.get("caveats") or []
     section_card(
-        '<p class="kyl-outcome-lab">Survey association</p>'
-        f'<p class="kyl-outcome-val">{pct:.1f}%</p>'
-        f'<p class="kyl-outcome-note"><b>{esc(band)}.</b> {esc(reading)}</p>'
+        '<p class="kyl-outcome-lab">Where this household sits in the survey</p>'
+        f'<p class="kyl-outcome-val">{pctile}<span class="kyl-outcome-suffix">th'
+        " percentile</span></p>"
+        f'<p class="kyl-outcome-note"><b>{esc(band)}.</b> {esc(summary)}</p>'
         '<p class="kyl-note" style="margin-top:.7rem">A survey association from'
         f" {esc(year)}, not an eligibility determination and not a personal"
         " forecast. What that means, and what it does not, is in the Methodology"
         " panel.</p>"
+    )
+    if caveats:
+        st.html(
+            '<details class="kyl-advanced"><summary>What this reading assumes'
+            "</summary><ul class=\"kyl-list kyl-fine\">"
+            + "".join(f"<li>{esc(c)}</li>" for c in caveats)
+            + "</ul></details>"
+        )
+    st.html(
+        '<details class="kyl-advanced"><summary>Model detail</summary>'
+        '<p class="kyl-fine">Raw model output, the share of modelled peer'
+        f' households expected to have reported SNAP receipt: {f["rate"]:.1f}%.'
+        " That figure is an association rate within survey data. It is not a"
+        " probability that you would receive benefits, and it is not a score."
+        "</p></details>"
     )
     st.html(
         '<p class="kyl-note">For an actual determination, eligibility is set by'
@@ -791,7 +649,7 @@ def _render_household(f: dict) -> None:
 
 
 def _render_methodology() -> None:
-    """What FinePrint observes, what it calculates, and what it cannot.
+    """What Know Your Loan observes, what it calculates, and what it cannot.
 
     Kept out of the three product tabs so each of those reads as a clean answer
     to one question. The uncomfortable sparsity statistics lead, because they
@@ -800,7 +658,7 @@ def _render_methodology() -> None:
     st.html(
         '<div style="margin:1.5rem 0 1rem">'
         "<h2>Methodology</h2>"
-        '<p class="kyl-note">What FinePrint directly observes, what it can'
+        '<p class="kyl-note">What Know Your Loan directly observes, what it can'
         " calculate from that, and where the data stops.</p></div>"
     )
 
@@ -812,7 +670,7 @@ def _render_methodology() -> None:
     left, right = st.columns(2, gap="large")
 
     with left:
-        st.markdown("#### What FinePrint directly observes")
+        st.markdown("#### What Know Your Loan directly observes")
         st.markdown(
             "Counts and categories of CFPB payday-loan complaints associated with"
             " each lender, taken from the consumer complaint database. This is"
@@ -828,7 +686,7 @@ def _render_methodology() -> None:
             "</ul>"
         )
 
-        st.markdown("#### What FinePrint can calculate directly")
+        st.markdown("#### What Know Your Loan can calculate directly")
         st.markdown(
             "The composition of a lender's own complaints, which is what the"
             " profile leads with:"
@@ -843,7 +701,7 @@ def _render_methodology() -> None:
             " every lender in the test suite."
         )
 
-        st.markdown("#### What FinePrint cannot calculate")
+        st.markdown("#### What Know Your Loan cannot calculate")
         st.markdown(
             "A customer-level complaint rate. We do not have customer counts,"
             " loans originated, transaction volume or market share for any lender"
@@ -909,7 +767,7 @@ def _render_methodology() -> None:
 
         st.markdown("#### What that means for this product")
         st.markdown(
-            "FinePrint therefore does not rank lenders by overall quality, and it"
+            "Know Your Loan therefore does not rank lenders by overall quality, and it"
             " publishes no overall score. It shows the observed complaint pattern,"
             " and makes a peer comparison only where the available evidence"
             " supports one. That is a limitation of what public complaint data"
@@ -940,7 +798,7 @@ def _render_methodology() -> None:
                 "It is a survey association, not an eligibility determination and"
                 " not a personal forecast, and it says nothing about any lender."
                 " The two analyses are never combined and there is no overall"
-                " FinePrint score."
+                " Know Your Loan score."
             )
             st.markdown("**Caveats**")
             for caveat in ctx.get("caveats", []):
@@ -953,14 +811,6 @@ def _render_methodology() -> None:
             " whole month. It is arithmetic on the numbers entered, not a quote,"
             " an offer, a rate comparison, or financial advice, and it ignores"
             " fees, missed payments and any rate change."
-        )
-
-        st.markdown("#### Two models, not one")
-        st.markdown(
-            "This app reads an eight-feature prototype artifact. The FastAPI"
-            " service behind the production interface serves a nine-feature model"
-            " that also uses county poverty share. The two are not interchangeable"
-            " and their figures should not be quoted for one another."
         )
 
         st.markdown("#### Sources")
@@ -1215,7 +1065,14 @@ def _lender_analysis(label: dict) -> str:
 
 
 def _household_analysis(f: dict) -> str:
-    facts = {"band_label": f["band_label"], "rate": f["rate"]}
+    # band_label is the codebook's own band sentence, not the panel's long
+    # summary: the analysis line sits under the panel and repeating the summary
+    # there read as the same sentence twice.
+    facts = {
+        "band_label": f["band"],
+        "percentile": f["percentile"],
+        "rate": f["rate"],
+    }
     return _build_analysis("household", facts, model=_analysis_model()).as_html()
 
 
@@ -1430,70 +1287,112 @@ with panels_col:
         # until it is submitted, so the analysis box could not clear the moment a
         # figure moved, which is the behaviour this panel is required to have.
         if True:
-            # What the query supplied, so "the user changed something" is a
-            # comparison rather than a guess.
-            _seed_age = (_route.household.get("age_band", 2) if _route else 2) - 1
-            _seed_edu = (_route.household.get("education", 3) if _route else 3) - 1
-            _seed_inc = (_route.household.get("household_income", 4) if _route else 4) - 1
-            _seed_mar = (_route.household.get("marital_status", 1) if _route else 1) - 1
-            _seed_met = 1 if (_route and _route.household.get("metro_area") == 1) else 0
-            _seed_size = int(_route.household.get("household_size", 3)) if _route else 3
+            # Every widget works in survey codes, not list positions. The
+            # previous version had selectboxes over label lists and a
+            # number_input for household size, then converted index -> code; that
+            # is where "the panel disagrees with its own seed" bugs came from,
+            # and the number_input was worse than cosmetic because it could send
+            # PPHHSIZE=20 for a model trained on codes 1-5. format_func puts the
+            # label in front of the user while the value underneath stays the
+            # code the booster was trained on.
+            _seed = dict(_route.household) if _route else {}
+
+            def _default(field: str, fallback: int) -> int:
+                value = _seed.get(field, fallback)
+                return value if isinstance(value, int) else fallback
+
             _c1, _c2 = st.columns(2)
             with _c1:
                 _age = st.selectbox(
-                    "Age group", AGE_BANDS, index=max(0, _seed_age),
+                    "Age group", sorted(_AGE_BANDS),
+                    index=sorted(_AGE_BANDS).index(_default("age_band", 2)),
+                    format_func=lambda c: _AGE_BANDS[c],
                     key=f"{CHAT_KEY}_age_{_TOKEN}",
                 )
                 _edu = st.selectbox(
-                    "Highest education", EDUCATION, index=max(0, min(_seed_edu, len(EDUCATION) - 1)),
+                    "Highest education", sorted(_EDUCATION),
+                    index=sorted(_EDUCATION).index(_default("education", 3)),
+                    format_func=lambda c: _EDUCATION[c],
                     key=f"{CHAT_KEY}_edu_{_TOKEN}",
                 )
                 _marital = st.selectbox(
-                    "Marital status", MARITAL, index=max(0, min(_seed_mar, len(MARITAL) - 1)),
+                    "Marital status", sorted(_MARITAL),
+                    # Default 1 ("Married"), preserving the pre-codebook default.
+                    # The survey has no "prefer not to say" option, so any default
+                    # asserts something; this one at least matches what shipped
+                    # before rather than silently changing it.
+                    index=sorted(_MARITAL).index(_default("marital_status", 1)),
+                    format_func=lambda c: _MARITAL[c],
                     key=f"{CHAT_KEY}_marital_{_TOKEN}",
                 )
             with _c2:
                 _income = st.selectbox(
-                    "Household income", INCOME,
-                    index=max(0, min(_seed_inc, len(INCOME) - 1)),
+                    "Household income", sorted(_INCOME),
+                    index=sorted(_INCOME).index(_default("household_income", 4)),
+                    format_func=lambda c: _INCOME[c],
                     key=f"{CHAT_KEY}_income_{_TOKEN}",
                 )
                 _metro = st.selectbox(
-                    "Live in a city or metro area", METRO, index=_seed_met,
+                    "Live in a city or metro area", sorted(_METRO),
+                    index=sorted(_METRO).index(_default("metro_area", 1)),
+                    format_func=lambda c: _METRO[c],
                     key=f"{CHAT_KEY}_metro_{_TOKEN}",
                 )
-                _size = st.number_input(
-                    "People in household", min_value=1, max_value=20,
-                    value=_seed_size, step=1, key=f"{CHAT_KEY}_size_{_TOKEN}",
+                _size = st.selectbox(
+                    "People in household", sorted(_SIZES),
+                    index=sorted(_SIZES).index(_default("household_size", 3)),
+                    format_func=lambda c: _SIZES[c],
+                    key=f"{CHAT_KEY}_size_{_TOKEN}",
                 )
+                _poverty = st.selectbox(
+                    "Poverty in your county", sorted(_POVERTY),
+                    index=sorted(_POVERTY).index(_default("county_poverty_share", -5)),
+                    format_func=lambda c: _POVERTY[c],
+                    key=f"{CHAT_KEY}_poverty_{_TOKEN}",
+                )
+            # The four child-presence columns. These are real model inputs, not
+            # decoration: the previous panel pinned total_children to 0 and
+            # child_ratio to 0.0, so a fifth of the feature vector was constant
+            # and the model was quietly scoring every household as childless.
+            st.markdown("Children in your household")
+            _ccols = st.columns(len(_CHILD_FIELDS))
+            _children: dict[str, int] = {}
+            for _i, (_field, _column) in enumerate(_CHILD_FIELDS.items()):
+                with _ccols[_i]:
+                    _children[_field] = int(
+                        st.checkbox(
+                            _fi.CHILD_AGE_LABELS[_column],
+                            value=False,
+                            key=f"{CHAT_KEY}_child_{_field}_{_TOKEN}",
+                        )
+                    )
 
-        _hcodes = {
-            "agecat": AGE_BANDS.index(_age) + 1,
-            "PPEDUC": EDUCATION.index(_edu) + 1,
-            "PPINCIMP": INCOME.index(_income) + 1,
-            "PPMARIT": MARITAL.index(_marital) + 1,
-            "PPMSACAT": 1 if _metro == "Yes" else 0,
-            "PPHHSIZE": int(_size),
-            "total_children": 0,
-            "child_ratio": 0.0,
+        _hinputs = {
+            "age_band": _age,
+            "education": _edu,
+            "household_income": _income,
+            "marital_status": _marital,
+            "household_size": _size,
+            "metro_area": _metro,
+            "county_poverty_share": _poverty,
+            **_children,
         }
-        _hfacts = _household_facts(_hcodes)
+        _hfacts = _household_facts(_hinputs)
         _render_household(_hfacts)
         _analysis_box(
             "household",
-            _fingerprint(**{k: v for k, v in sorted(_hcodes.items())}),
+            _fingerprint(**{k: v for k, v in sorted(_hinputs.items())}),
             lambda: _household_analysis(_hfacts),
-            from_query=(
-                AGE_BANDS.index(_age) == max(0, _seed_age)
-                and EDUCATION.index(_edu) == max(0, min(_seed_edu, len(EDUCATION) - 1))
-                and INCOME.index(_income) == max(0, min(_seed_inc, len(INCOME) - 1))
-                and MARITAL.index(_marital) == max(0, min(_seed_mar, len(MARITAL) - 1))
-                # METRO.index, not the code: _seed_met is an index into the
-                # option list, and comparing it against the 0/1 code made the
-                # panel disagree with its own seed, so it never auto-generated.
-                and METRO.index(_metro) == _seed_met
-                and int(_size) == _seed_size
-            ),
+            from_query=_hinputs == {
+                "age_band": _default("age_band", 2),
+                "education": _default("education", 3),
+                "household_income": _default("household_income", 4),
+                "marital_status": _default("marital_status", 1),
+                "household_size": _default("household_size", 3),
+                "metro_area": _default("metro_area", 1),
+                "county_poverty_share": _default("county_poverty_share", -5),
+                **{f: 0 for f in _CHILD_FIELDS},
+            },
         )
 
     # --- 3. Loan payoff ---

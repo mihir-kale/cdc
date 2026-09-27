@@ -1,9 +1,13 @@
-# Dependencies for app.py, the Streamlit prototype.
+# Dependencies for app.py, which is the product.
 #
-# Deliberately separate from backend/requirements.txt. This app only ever runs
-# inference -- it loads the committed artifact through xgb.Booster and never
-# fits -- so it needs neither scikit-learn nor scipy, which together are ~145 MB
-# of the backend's dependency tree.
+# Deliberately separate from backend/requirements.txt. The app only ever runs
+# inference -- it loads the committed artifacts and never fits -- so it needs
+# neither scikit-learn nor scipy, which together are ~145 MB of the backend's
+# dependency tree.
+#
+# xgboost and pandas are still required even though app.py no longer imports
+# them directly: it loads backend/app/financial_impact.py by path, and that
+# module does.
 #
 # Used by Streamlit Community Cloud, which installs this file at deploy time.
 # Locally, `pip install -r requirements.txt` then `streamlit run app.py`.

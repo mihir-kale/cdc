@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import unittest
 
+from app import financial_impact
 from app.chat import guard, scope, tools
 from app.chat.model import EchoModel, ScriptedModel
 from app.chat.orchestrator import answer
+from app.chat.router import route
 from app.payoff import estimate_payoff
 
 
@@ -377,6 +379,69 @@ class TestAssistant(unittest.TestCase):
         # the assistant grade a lender.
         r = answer("Uprova Credit complaints", model=EchoModel())
         self.assertIn(r.outcome, {"answer", "guarded"})
+
+
+class TestRouterCodebookParity(unittest.TestCase):
+    """The router restates the survey codebook as regexes.
+
+    That restatement is a duplicate, and it drifted: two age bands were
+    unreachable, one pair was conflated, and two income bands had no pattern at
+    all, so a query could be silently coded into the wrong band and the panel
+    would open showing a number derived from an input the user never gave.
+
+    These tests assert the two copies agree on which codes exist, and that every
+    code is reachable by at least one ordinary phrasing.
+    """
+
+    def test_every_age_band_is_reachable(self) -> None:
+        seen = {}
+        for phrase in (
+            "I'm 18-24", "I'm 20-24", "under 25", "I'm 25-34", "I'm 35-44",
+            "I'm 45-54", "I'm 55-61", "I'm 62-69", "I'm 70-74", "I'm 80-89",
+            "I'm over 75",
+        ):
+            code = route(phrase).household.get("age_band")
+            self.assertIsNotNone(code, f"{phrase!r} resolved no age band")
+            seen.setdefault(code, phrase)
+        self.assertEqual(
+            set(seen), set(financial_impact.AGE_BANDS),
+            "some age code cannot be reached from any phrasing",
+        )
+
+    def test_every_income_band_is_reachable(self) -> None:
+        seen = {}
+        for phrase in (
+            "income 18k", "under 20k", "income 25k", "income 35k", "income 45k",
+            "income 55k", "income 70k", "income 85k", "income 120k", "income 180k",
+        ):
+            code = route(phrase).household.get("household_income")
+            self.assertIsNotNone(code, f"{phrase!r} resolved no income band")
+            seen.setdefault(code, phrase)
+        self.assertEqual(
+            set(seen), set(financial_impact.INCOME_BANDS),
+            "some income code cannot be reached from any phrasing",
+        )
+
+    def test_a_typed_income_lands_in_its_own_band(self) -> None:
+        # The specific mis-mapping this replaced: "income 120k" was coded 6,
+        # which is $60,000-$74,999.
+        for phrase, expected in (
+            ("income 70k", 6), ("income 85k", 7),
+            ("income 120k", 8), ("income 180k", 9),
+        ):
+            self.assertEqual(
+                route(phrase).household.get("household_income"), expected, phrase
+            )
+
+    def test_under_twenty_thousand_is_not_read_as_twenty_thousand(self) -> None:
+        # "under 20k" contains "20k", and the bands are tried top down, so band 2
+        # used to claim it.
+        self.assertEqual(route("under 20k").household.get("household_income"), 1)
+        self.assertEqual(route("income 20k").household.get("household_income"), 2)
+
+    def test_seventy_two_is_not_coded_as_the_sixty_two_band(self) -> None:
+        self.assertEqual(route("I'm 70-74").household.get("age_band"), 7)
+        self.assertEqual(route("I'm 62-69").household.get("age_band"), 6)
 
 
 class TestPayoffToolParity(unittest.TestCase):

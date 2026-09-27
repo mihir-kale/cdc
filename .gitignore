@@ -10,11 +10,8 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 
-# Node
+# Node (browser-checks/ only; there is no frontend any more)
 node_modules/
-.next/
-out/
-next-env.d.ts
 
 # Data (datasets are large; fetch them with a script, don't commit them)
 data/raw/*
@@ -23,11 +20,11 @@ data/processed/*
 !data/raw/README.md
 !data/processed/.gitkeep
 
-# Model artifacts retrained by the Streamlit prototype. The root
-# snap_xgboost.json is already tracked, so this only affects newly built copies
-# and stops them showing up as untracked noise. The served artifact is
-# backend/app/generated/financial_impact_model.json and stays tracked; see
-# "Two SNAP models" in README.md before changing anything here.
+# Artifacts written by SNAPModeltrain.py, the teammate's original training
+# script. The root snap_xgboost.json is tracked but nothing reads it -- app.py
+# used to, and now loads backend/app/generated/financial_impact_model.json via
+# financial_impact.py instead. This entry only affects newly built copies. See
+# "Known rough edges" in README.md before changing anything here.
 snap_xgboost.json
 *.ubj
 

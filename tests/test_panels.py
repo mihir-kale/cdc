@@ -144,7 +144,9 @@ class TestPartialQueries(unittest.TestCase):
         at = run("I'm 35-44, household income 50-75k")
         t = text(at)
         self.assertNotIn("Fees & Costs", t)
-        self.assertIn("Survey association", t)
+        # The panel headlines the survey percentile rather than the raw
+        # association rate; the rate is demoted to a disclosure.
+        self.assertIn("Where this household sits in the survey", t)
 
     def test_two_lenders_closes_the_panel(self) -> None:
         at = run("Uprova Credit and Cash Express, $300 at 391%")
@@ -231,8 +233,11 @@ class TestAnalysisInvalidation(unittest.TestCase):
     def test_household_edit_clears_its_analysis(self) -> None:
         at = run("I'm 35-44, household income 50-75k, college graduate")
         self.assertIn("What this means", text(at))
-        self._keyed(at, "kyl_chat_age").set_value("55-64").run()
-        self.assertEqual(self._keyed(at, "kyl_chat_age").value, "55-64")
+        # Age bands come from the survey codebook, so "55-61" is a real option
+        # and "55-64" -- which the old local copy invented -- no longer is. The
+        # widget's value is the survey code behind the label, not the label.
+        self._keyed(at, "kyl_chat_age").set_value("55-61").run()
+        self.assertEqual(self._keyed(at, "kyl_chat_age").value, 5)
         t = text(at)
         self.assertIn("have changed since this was last read", t)
 
