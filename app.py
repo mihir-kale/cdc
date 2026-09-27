@@ -363,11 +363,6 @@ def _render_comparison_table(lenders: list[dict], needle: str) -> None:
     frame = frame.sort_values("Lender").reset_index(drop=True)
 
     matched = f' matching "{esc(needle)}"' if needle else ""
-    st.html(
-        '<p class="kyl-note" style="margin:.6rem 0 .3rem">'
-        f"{len(frame):,} of {len(lenders):,} lenders{matched}. "
-        "Sorted by name. Select a row to open its complaint profile.</p>"
-    )
 
     event = st.dataframe(
         frame.drop(columns=["id"]),
@@ -992,9 +987,6 @@ with lender_tab:
     st.html(
         '<div style="margin:1.5rem 0 1rem">'
         "<h2>Lender Complaint Profile</h2>"
-        '<p class="kyl-note">See how a lender’s CFPB payday-loan complaint pattern'
-        " compares with modeled peers. Complaint data reflects reported issues, not"
-        " the total number of customers or an official safety determination.</p>"
         "</div>"
     )
 
@@ -1037,9 +1029,7 @@ with lender_tab:
             section_card(
                 "<h3>No lender selected</h3>"
                 '<p class="kyl-note">Pick a row from the list, or search for a'
-                " lender, to see its complaint profile. Each row below is one"
-                " complaint type compared against modeled payday peers; hover a"
-                " row for the numbers behind the verdict.</p>"
+                " lender, to see its complaint profile.</p>"
             )
         else:
             label = get_lender(picked_id)
