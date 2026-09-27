@@ -26,6 +26,8 @@ import hashlib
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -345,6 +347,127 @@ class GeminiModel:
                     self._cache.popitem(last=False)
             return text
         raise last or RuntimeError("unreachable")  # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek
+# ---------------------------------------------------------------------------
+
+#: DeepSeek exposes an OpenAI-compatible API, so this is one POST with a bearer
+#: token. It is done with urllib rather than the openai package on purpose: a
+#: second SDK would add a dependency to the deploy for one endpoint, and
+#: urllib is already here.
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_KEY_ENV_VARS = ("DEEPSEEK_API_KEY",)
+
+
+def deepseek_key_from_env() -> str | None:
+    for name in DEEPSEEK_KEY_ENV_VARS:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
+@dataclass
+class DeepSeekModel:
+    """A :class:`ChatModel` backed by DeepSeek's OpenAI-compatible endpoint.
+
+    Same contract as :class:`GeminiModel`: it gets the prompt and returns text,
+    and failures are raised for the caller to fall back from. An OpenAI-compatible
+    payload is built by hand so the sanitiser and the timeout stay explicit.
+    """
+
+    api_key: str
+    model: str = DEFAULT_DEEPSEEK_MODEL
+    temperature: float = 0.2
+    max_tokens: int = 800
+    base_url: str = DEEPSEEK_BASE_URL
+    timeout_s: float = 30.0
+    cache_size: int = 128
+    _cache: "OrderedDict[str, str]" = field(default_factory=OrderedDict, repr=False)
+
+    def complete(self, turns: list[Turn], tools: list[dict[str, Any]]) -> str:
+        prompt = "\n\n".join(
+            f"[{t.role}{'/' + t.name if t.name else ''}]\n{t.content}" for t in turns
+        )
+        cache_key = hashlib.sha256(
+            f"{self.model}|{self.temperature}|{self.max_tokens}|{prompt}".encode()
+        ).hexdigest()
+        if cache_key in self._cache:
+            self._cache.move_to_end(cache_key)
+            return self._cache[cache_key]
+
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+                "stream": False,
+            }
+        ).encode()
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+            body = json.loads(response.read())
+        text = (body["choices"][0]["message"]["content"] or "").strip()
+        if text:
+            self._cache[cache_key] = text
+            while len(self._cache) > self.cache_size:
+                self._cache.popitem(last=False)
+        return text
+
+
+def resolve_deepseek_config(secret_table: dict[str, Any] | None = None) -> dict | None:
+    """DeepSeek settings from the ``[deepseek]`` table, or the environment.
+
+    Mirrors :func:`resolve_gemini_config`, including the None-means-unconfigured
+    contract, so the app can treat both providers identically.
+    """
+    cfg: dict[str, Any] = {}
+    if secret_table:
+        cfg = {k: str(v).strip() for k, v in dict(secret_table).items() if v}
+    key = cfg.get("api_key") or deepseek_key_from_env()
+    if not key:
+        return None
+    cfg["api_key"] = key
+    cfg.setdefault("model", DEFAULT_DEEPSEEK_MODEL)
+    cfg.setdefault("base_url", DEEPSEEK_BASE_URL)
+    return cfg
+
+
+def build_model(cfg: dict[str, Any] | None) -> "ChatModel | None":
+    """Build a client from a resolved config, or None.
+
+    The single place a provider name turns into a class, so the app does not
+    grow a branch per provider.
+    """
+    if not cfg:
+        return None
+    provider = cfg.get("provider", "gemini")
+    try:
+        if provider == "deepseek":
+            return DeepSeekModel(
+                api_key=cfg["api_key"],
+                model=cfg.get("model", DEFAULT_DEEPSEEK_MODEL),
+                base_url=cfg.get("base_url", DEEPSEEK_BASE_URL),
+            )
+        if provider == "gemini":
+            return GeminiModel(
+                api_key=cfg["api_key"],
+                model=cfg.get("model", DEFAULT_GEMINI_MODEL),
+            )
+    except Exception:
+        return None
+    return None
 
 
 def render_transcript(turns: list[Turn]) -> str:

@@ -38,29 +38,35 @@ const check = (name, pass, detail = "") => {
 // a half-rendered page and reported panels that were simply not up yet. Streamlit
 // publishes a status widget while a script run is in progress, so poll that
 // instead: it is correct whether or not a model is configured.
-const waitApp = async (page, { settle = 400, timeout = 120000 } = {}) => {
-  await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout });
-  await page.waitForFunction(
-    () => (document.body.innerText || "").includes("Know Your Loan"),
-    { timeout, polling: 500 },
-  );
+const waitIdle = async (page, { settle = 400, timeout = 120000 } = {}) => {
+  // Wait for one quiet period: no script run in progress, and stable for
+  // `settle` ms. Streamlit publishes a status widget while a run is in progress.
   const deadline = Date.now() + timeout;
-  // Wait for one quiet period: no run in progress, stable for `settle` ms.
-  let last = -1;
+  let since = -1;
   for (;;) {
     const busy = await page.evaluate(
       () => !!document.querySelector('[data-testid="stStatusWidget"]'),
     );
     if (!busy) {
-      if (last === -1) last = Date.now();
-      else if (Date.now() - last >= settle) break;
+      if (since === -1) since = Date.now();
+      else if (Date.now() - since >= settle) break;
     } else {
-      last = -1;
+      since = -1;
     }
     if (Date.now() > deadline) break;
     await new Promise((r) => setTimeout(r, 150));
   }
   await new Promise((r) => setTimeout(r, 300));
+};
+
+const waitApp = async (page, opts = {}) => {
+  const { timeout = 120000 } = opts;
+  await page.waitForSelector('[data-testid="stAppViewContainer"]', { timeout });
+  await page.waitForFunction(
+    () => (document.body.innerText || "").includes("Know Your Loan"),
+    { timeout, polling: 500 },
+  );
+  await waitIdle(page, opts);
 };
 const txt = (page) => page.evaluate(() => document.body.innerText);
 const settle = (ms = 3000) => new Promise((r) => setTimeout(r, ms));
@@ -81,7 +87,11 @@ const submitQuery = async (page, q) => {
     ].find((x) => /analyze with ai/i.test(x.innerText || ""));
     if (b) b.click();
   });
-  await settle(4500);
+  // Not settle(4500). With a model configured the click starts a live API call,
+  // and 4.5s is sometimes not enough -- the assertions then ran against a page
+  // still rendering, which showed up as intermittent failures on the payoff
+  // panel and nothing at all without a key.
+  await waitIdle(page);
 };
 
 const openPanel = async (page, heading) => {

@@ -76,6 +76,8 @@ try:
         DEFAULT_GEMINI_MODEL,
         GeminiModel,
         ScriptedModel as _ScriptedModel,
+        build_model,
+        resolve_deepseek_config,
         resolve_gemini_config,
     )
     from app.chat.narrative import (
@@ -100,6 +102,8 @@ except ImportError as _exc:  # pragma: no cover
     GeminiModel = None
     DEFAULT_GEMINI_MODEL = ""
     resolve_gemini_config = lambda table=None: None  # noqa: E731
+    resolve_deepseek_config = lambda table=None: None  # noqa: E731
+    build_model = lambda cfg=None: None  # noqa: E731
     _estimate_payoff = None
     _build_analysis = None
     _route = None
@@ -435,46 +439,51 @@ _GEMINI_MODEL: list = []
 
 
 def _gemini_config() -> dict | None:
-    """Gemini settings from Streamlit secrets, or the environment, or None.
+    """Model settings from Streamlit secrets, or the environment, or None.
 
-    Reads the ``[gemini]`` table in ``.streamlit/secrets.toml`` and hands it to
-    the resolver in ``app.chat.model``, which owns the decision and the
-    environment fallback. Returns None when no key is configured, and that None
-    is the signal the app runs its deterministic text -- not an error.
+    Reads a ``[gemini]`` or a ``[deepseek]`` table in
+    ``.streamlit/secrets.toml``. Either is enough on its own; if both are present
+    Gemini wins, so a half-removed block cannot silently change providers. The
+    decision itself lives in ``app.chat.model`` because ``app.py`` is a Streamlit
+    script and cannot be imported by the test suite. Cached per process, because
+    that is a Streamlit concern rather than a model's.
     """
     if _GEMINI_MODEL:
         return _GEMINI_MODEL[0]
 
-    table = None
-    try:
-        table = st.secrets.get("gemini")
-    except Exception:
-        # No secrets.toml, or no [gemini] table. Not an error: the app runs its
-        # deterministic text when no key is configured.
-        table = None
+    def table(name: str):
+        try:
+            return st.secrets.get(name)
+        except Exception:
+            # No secrets.toml, or no such table. Not an error: with no key the app
+            # runs its deterministic text.
+            return None
 
-    cfg = resolve_gemini_config(table)
+    # The provider is recorded by which resolver produced the config, not by
+    # re-inspecting the secrets, so it cannot drift from what was actually used.
+    cfg = resolve_gemini_config(table("gemini"))
+    if cfg is not None:
+        cfg["provider"] = "gemini"
+    else:
+        cfg = resolve_deepseek_config(table("deepseek"))
+        if cfg is not None:
+            cfg["provider"] = "deepseek"
+
     _GEMINI_MODEL.append(cfg)
     return cfg
 
 
 def _gemini_model():
-    """A configured Gemini client, or None when no key is set.
+    """A configured client, or None when no key is set.
 
-    Built lazily and cached, so a Streamlit rerun reuses one client. Any failure
-    here -- the SDK missing, a malformed key -- degrades to the deterministic
-    text rather than taking the app down.
+    Built lazily and cached so a Streamlit rerun reuses one client. Any failure
+    to build it degrades to the deterministic text rather than taking the app
+    down.
     """
     cfg = _gemini_config()
-    if cfg is None or GeminiModel is None:
+    if cfg is None:
         return None
-    try:
-        return GeminiModel(
-            api_key=cfg["api_key"],
-            model=cfg.get("model", DEFAULT_GEMINI_MODEL),
-        )
-    except Exception:
-        return None
+    return build_model(cfg)
 
 
 def _narrative_model():

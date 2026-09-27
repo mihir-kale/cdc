@@ -249,34 +249,47 @@ panel renders its deterministic text, and no network call is made. Adding a key
 changes the prose and nothing else.
 
 Paste a key into `.streamlit/secrets.toml` (copy `.streamlit/secrets.toml.example`),
-or into **Settings → Secrets** on Streamlit Community Cloud:
+or into **Settings → Secrets** on Streamlit Community Cloud. Either provider
+works on its own; if both are present Gemini wins.
+
+**DeepSeek** (OpenAI-compatible, recommended for a deployed app):
+
+```toml
+[deepseek]
+api_key = "sk-..."
+# model = "deepseek-chat"
+```
+
+**Google Gemini:**
 
 ```toml
 [gemini]
-api_key = "PASTE_YOUR_KEY_HERE"
-# model = "gemini-3.6-flash"   # optional
+api_key = "..."
+# model = "gemini-3.6-flash"
 ```
 
-For a local run without a secrets file, `GEMINI_API_KEY` or `GOOGLE_API_KEY` in
-the environment is equivalent. Create a key at
-<https://aistudio.google.com/apikey>.
-
-**Quota is the practical limit here.** The Gemini free tier allows 20
-`generate_content` requests per day, per model, per project. The household panel
-generates its analysis on page load, so a deployed app spends that in about 20
-views and then falls back to the deterministic text — silently, because that
-fallback is the designed behaviour. Enable billing if the model is meant to do
-real work; otherwise expect it to be used a few times an hour at best.
-
-The client is `google-genai`, the current GA SDK. (`google-generativeai` is the
-deprecated predecessor and is not used.) The SDK is imported lazily, so the app
-starts and runs without it.
+For a local run without a secrets file, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY` or
+`GOOGLE_API_KEY` in the environment are equivalent.
 
 `_narrative_model()` and `_analysis_model()` in `app.py` are the two hooks, and
 both return the same cached client. A reply is used only if it survives the
 guard; an API error, an empty reply, or a rejected reply all fall back to the
 deterministic text, so **a broken or hostile model degrades the prose and
 nothing else**.
+
+Two implementation notes worth knowing:
+
+- **DeepSeek needs no new dependency.** Its API is OpenAI-compatible, so the
+  client is one `urllib` POST rather than a second SDK on the deploy. Gemini
+  does need `google-genai`, imported lazily so the app starts without it.
+- **Replies are cached by prompt.** A panel's figures are deterministic for a
+  given state, so without this every Streamlit rerun re-called the API for text
+  it had already written — a repeated query measured 7.6s. Empty replies are
+  deliberately not cached.
+
+Gemini's free tier allows 20 requests per day per model, which a deployed app
+spends in about 20 page views before silently falling back to the deterministic
+text. That is the main reason DeepSeek is the default recommendation here.
 
 The guard is the part that matters. It rejects rankings, lender verdicts, risk
 and credit scores, unsolicited advice, and any figure that was not in the tool
