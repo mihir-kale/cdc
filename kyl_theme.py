@@ -330,8 +330,12 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
      page. The padding added back is what keeps the wordmark clear of
      Streamlit's toolbar, which is pinned to the top of the viewport. */
   margin-top: -7rem;
+  /* The gap between the band and the first body text is external to the band,
+     so it has to be a margin: padding-bottom only makes the masthead taller and
+     leaves the body text just as close to the teal. */
+  margin-bottom: 1.25rem;
   background: {t['primary']};
-  padding: 4.25rem 0 1.1rem;
+  padding: 4.25rem 0 1.5rem;
   border-radius: 0;
 }}
 /* Streamlit drops that top padding to 2.5rem below its own breakpoint, so the
@@ -367,7 +371,7 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
   display: flex; align-items: center; flex: 0 0 auto;
 }}
 .kyl-header-mark img {{
-  display: block; width: 2.75rem; height: auto;
+  display: block; width: 3.25rem; height: auto;
 }}
 .kyl-header-text {{ display: block; min-width: 0; }}
 /* Wordmark. The heaviest use of the display face. */
