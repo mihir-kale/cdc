@@ -350,6 +350,25 @@ padding: .4rem 0; border-bottom: 1px solid{t['border']};
   text-decoration-color: {t['border_strong']};
 }}
 
+/* ------------------------------------------------- the offer briefing (Ask) */
+.kyl-chat {{
+  border: 1px solid {t['border']}; border-radius: {t['radius']};
+  background: {t['card']}; padding: 1rem 1.1rem; margin: .5rem 0 1rem;
+}}
+.kyl-chat-h {{
+  font-size: .8rem; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: {t['primary']};
+  margin: .9rem 0 .35rem;
+}}
+.kyl-chat-h:first-child {{ margin-top: 0; }}
+/* What is still missing from the pasted offer. Needs to read as an action, not
+   as an error, so it is amber rather than red. */
+.kyl-chat-needs {{
+  margin-top: .8rem; padding: .5rem .7rem; border-radius: {t['radius_sm']};
+  background: {t['warning_soft']}; border: 1px solid {t['warning']};
+  color: {t['text']}; font-size: .9rem;
+}}
+
 /* ------------------------------------------------ the complaint profile (hero) */
 /* Ordered as the product question is asked: what consumers report, then how it
    compares with peers, then how much evidence there is. */

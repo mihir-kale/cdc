@@ -33,7 +33,6 @@ from __future__ import annotations
 import html
 import importlib.util
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -65,6 +64,22 @@ _spec.loader.exec_module(_label_store)
 
 get_lender = _label_store.get_lender
 lender_index = _label_store.lender_index
+
+# The assistant lives in the backend package so it is covered by CI, and is
+# loaded the same way for the same reason: importing "app.chat" would collide
+# with this file's own name.
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+try:
+    from app.chat.orchestrator import answer as _chat_answer
+    from app.chat.orchestrator import answer_offer as _answer_offer
+    from app.chat.model import ScriptedModel as _ScriptedModel
+    from app.payoff import estimate_payoff as _estimate_payoff
+except ImportError as _exc:  # pragma: no cover
+    _chat_answer = None
+    _ScriptedModel = None
+    _estimate_payoff = None
+    _CHAT_IMPORT_ERROR = _exc
 
 from kyl_theme import TOKENS, stylesheet  # noqa: E402
 
@@ -408,6 +423,58 @@ def _render_lender_picker(lenders: list[dict], needle: str, picked_id: str | Non
         " usually have more. This list is for finding a lender, not ranking"
         " one.</p>"
     )
+
+
+def _household_profile() -> dict:
+    """The Household tab's current selections, as survey codes.
+
+    Read from session state rather than from the widgets, so the assistant works
+    even when its own tab is the one on screen and the Household tab's widgets
+    were never rendered this run.
+    """
+    out: dict = {}
+    for field, key in (
+        ("age_band", "kyl_age_band"),
+        ("education", "kyl_education"),
+        ("household_income", "kyl_income"),
+        ("marital_status", "kyl_marital"),
+        ("household_size", "kyl_household_size"),
+        ("metro_area", "kyl_metro"),
+        ("county_poverty_share", "kyl_county_poverty"),
+    ):
+        if key in st.session_state and st.session_state[key] is not None:
+            out[field] = st.session_state[key]
+    return out if len(out) == 7 else {}
+
+
+def _render_briefing(reply) -> None:
+    """One pasted offer and its briefing, section by section.
+
+    Emitted as a single st.html call. Splitting the wrapper across several calls
+    leaves Streamlit to auto-close the unclosed div, which renders as an empty
+    bordered box above the content.
+    """
+    b = getattr(reply, "briefing", None)
+    parts = ['<div class="kyl-chat">']
+    if b is not None:
+        for section in b.sections:
+            if section.empty and not section.lines:
+                continue
+            parts.append(f'<p class="kyl-chat-h">{esc(section.heading)}</p>')
+            parts.extend(
+                f'<p class="kyl-note">{esc(line)}</p>' for line in section.lines
+            )
+            if section.note:
+                parts.append(f'<p class="kyl-fine">{esc(section.note)}</p>')
+        if b.needs:
+            parts.append(
+                '<p class="kyl-chat-needs">Still needed: '
+                f"{esc('; '.join(b.needs))}.</p>"
+            )
+    else:
+        parts.append(f'<p class="kyl-note">{esc(reply.text)}</p>')
+    parts.append("</div>")
+    st.html("".join(parts))
 
 
 PEER_WORDING = {
@@ -922,12 +989,13 @@ st.html(
     "</header>"
 )
 
-lender_tab, household_tab, calculator_tab, methodology_tab = st.tabs(
+lender_tab, household_tab, calculator_tab, methodology_tab, chat_tab = st.tabs(
     [
         "Lender Complaint Profile",
         "Household Financial Context",
         "Loan Payoff Calculator",
         "Methodology",
+        "Ask",
     ]
 )
 
@@ -1067,15 +1135,19 @@ with calculator_tab:
             format="%.2f",
         )
 
-    monthly_rate = (apr / 100.0) / 12.0
-    monthly_interest = principal * monthly_rate
+    # The arithmetic now lives in backend/app/payoff.py, shared with the
+    # assistant's estimate_payoff tool, so the number on screen and the number
+    # the assistant quotes cannot drift apart.
+    _estimate = _estimate_payoff(principal, apr, payment)
+    monthly_rate = _estimate.monthly_rate
+    monthly_interest = _estimate.monthly_interest
 
     with loan_col:
         # Always shown, so the number the payment must beat is never hidden.
         if monthly_interest > 0:
             st.html(
                 f'<p class="kyl-note" style="margin:.35rem 0 0">Minimum payment to'
-                f" cover this month’s interest: <b>${monthly_interest:,.2f}</b></p>"
+                f" cover this month\u2019s interest: <b>${monthly_interest:,.2f}</b></p>"
             )
         else:
             st.html(
@@ -1084,11 +1156,9 @@ with calculator_tab:
             )
 
     with payoff_col:
-        if payment <= 0:
+        if _estimate.status == "invalid_payment":
             alert("warning", "Check your payment.", "Enter a monthly payment above zero.")
-        elif monthly_rate > 0 and payment <= monthly_interest:
-            # Previously rendered through st.write, which turned the two dollar
-            # amounts into a LaTeX span and left literal ** markers on screen.
+        elif _estimate.status == "interest_not_covered":
             alert(
                 "danger",
                 "Debt trap warning:",
@@ -1097,27 +1167,18 @@ with calculator_tab:
                 " level the balance will grow rather than be paid off.",
             )
         else:
-            if monthly_rate == 0:
-                months = math.ceil(principal / payment)
-            else:
-                n_months = -math.log(
-                    1 - (monthly_rate * principal) / payment
-                ) / math.log(1 + monthly_rate)
-                months = math.ceil(n_months)
-
-            total_paid = payment * months
-            total_interest = total_paid - principal
-            years = round(months / 12.0, 1)
-            interest_share = (total_interest / total_paid * 100) if total_paid > 0 else 0.0
-
             m1, m2 = st.columns(2)
             with m1:
-                st.metric("Estimated payoff time", f"{months} months", delta=f"~{years} years")
-                st.metric("Total amount paid", f"${total_paid:,.2f}")
-            with m2:
-                st.metric("Total interest", f"${total_interest:,.2f}")
                 st.metric(
-                    "Interest as share of payments", f"{interest_share:.1f}%"
+                    "Estimated payoff time",
+                    f"{_estimate.months} months",
+                    delta=f"~{_estimate.years} years",
+                )
+                st.metric("Total amount paid", f"${_estimate.total_paid:,.2f}")
+            with m2:
+                st.metric("Total interest", f"${_estimate.total_interest:,.2f}")
+                st.metric(
+                    "Interest as share of payments", f"{_estimate.interest_share:.1f}%"
                 )
 
 
@@ -1138,3 +1199,93 @@ st.html(
 # ==========================================================================
 with methodology_tab:
     _render_methodology()
+
+
+# ==========================================================================
+# 5. Ask
+# ==========================================================================
+CHAT_KEY = "kyl_chat"
+CHAT_MODEL_KEY = "kyl_chat_model"
+
+with chat_tab:
+    st.html(
+        '<div style="margin:1.5rem 0 1rem">'
+        "<h2>Check an offer</h2>"
+        '<p class="kyl-note">Paste a loan offer and you get three things: the'
+        " kinds of complaints people report about that lender, a full breakdown"
+        " of what you would be paying on those terms, and where households like"
+        " yours sit in national survey data.</p>"
+        "</div>"
+    )
+
+    if _chat_answer is None:  # pragma: no cover
+        st.error(
+            "The assistant could not be loaded, so it is unavailable. "
+            f"({_CHAT_IMPORT_ERROR})"
+        )
+    else:
+        # A form, so the pasted text and the checkbox are submitted together.
+        # Outside a form the textarea's value is only sent on blur, which races
+        # the button click: paste an offer, click the button, and the click can
+        # arrive with an empty textarea and silently do nothing. Batching the
+        # values removes the ordering dependency entirely.
+        with st.form(f"{CHAT_KEY}_form", border=False):
+            offer_text = st.text_area(
+                "Paste the offer",
+                placeholder=(
+                    "Paste the loan offer here, however it is laid out. For"
+                    " example:\n\nCash Advance USA\nLoan Amount: $300.00\n"
+                    "APR: 391.00%\nFinance Charge: $76.00\n"
+                    "Total Repayment: $376.00\nTerm: 14 days"
+                ),
+                height=180,
+                key=f"{CHAT_KEY}_offer",
+            )
+            want_household = st.checkbox(
+                "Include the household survey section",
+                key=f"{CHAT_KEY}_household",
+                value=False,
+            )
+            submitted = st.form_submit_button(
+                "Check this offer", type="primary"
+            )
+
+        if submitted and offer_text.strip():
+            # Loan figures and the household profile come from the interface,
+            # never from parsing the question.
+            profile: dict = {}
+            household = _household_profile()
+            if household:
+                profile.update(household)
+            for field, key in (
+                ("principal", "kyl_principal"),
+                ("apr", "kyl_apr"),
+                ("payment", "kyl_payment"),
+            ):
+                if key in st.session_state:
+                    profile[field] = float(st.session_state[key])
+
+            # No endpoint is provisioned, so no model is passed: the briefing
+            # itself is the reply. Everything in it comes from the same tools the
+            # other tabs use, so it is already correct; a model will only
+            # rephrase it later, behind the same guard.
+            reply = _answer_offer(
+                offer_text,
+                household_profile=profile,
+                include_household=want_household,
+            )
+            st.session_state[CHAT_KEY] = [
+                *st.session_state.get(CHAT_KEY, []),
+                {"question": "Pasted offer", "reply": reply},
+            ]
+            st.rerun()
+
+        for entry in st.session_state.get(CHAT_KEY, []):
+            _render_briefing(entry["reply"])
+
+        if st.session_state.get(CHAT_KEY):
+            st.button(
+                "Clear",
+                key=f"{CHAT_KEY}_clear",
+                on_click=lambda: st.session_state.pop(CHAT_KEY, None),
+            )

@@ -123,7 +123,8 @@ try {
   if (tabInfo.error) {
     check("tablist found", false, tabInfo.error);
   } else {
-    check("tablist found with 4 tabs", tabInfo.count === 4, `count=${tabInfo.count}`);
+    // Five: the three data tabs, Methodology, and Ask.
+    check("tablist found with 5 tabs", tabInfo.count === 5, `count=${tabInfo.count}`);
 
     const parse = (c) => {
       const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c || "");
@@ -273,7 +274,7 @@ try {
   await page.screenshot({ path: `${OUT}/lender_1440_full.png`, fullPage: true });
 
   // ---- 5. Other tabs render and are clickable.
-  for (const label of ["Household", "Payoff", "Methodology"]) {
+  for (const label of ["Household", "Payoff", "Methodology", "Ask"]) {
     const ok = await page.evaluate((l) => {
       const b = [...document.querySelectorAll('[role="tablist"] [role="tab"]')].find(
         (x) => new RegExp(l, "i").test(x.innerText || x.textContent || ""),

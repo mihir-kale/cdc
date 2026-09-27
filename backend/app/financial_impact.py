@@ -476,6 +476,19 @@ def household_context(inputs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# The survey codebook, in one place, so a caller can enumerate the required
+# fields without duplicating the list that validate_inputs enforces.
+CODEBOOK_FIELDS: dict[str, Any] = {
+    "age_band": AGE_BANDS,
+    "education": EDUCATION_LEVELS,
+    "household_income": INCOME_BANDS,
+    "marital_status": MARITAL_STATUS,
+    "household_size": HOUSEHOLD_SIZES,
+    "metro_area": METRO_STATUS,
+    "county_poverty_share": COUNTY_POVERTY_SHARE,
+}
+
+
 def validate_inputs(inputs: dict[str, Any]) -> None:
     """Reject codes that are not in the survey codebook.
 
@@ -483,16 +496,7 @@ def validate_inputs(inputs: dict[str, Any]) -> None:
     a 422. Keeping the allowed values next to the labels means a codebook change
     cannot leave the API accepting codes the model was never trained on.
     """
-    allowed = {
-        "age_band": AGE_BANDS,
-        "education": EDUCATION_LEVELS,
-        "household_income": INCOME_BANDS,
-        "marital_status": MARITAL_STATUS,
-        "household_size": HOUSEHOLD_SIZES,
-        "metro_area": METRO_STATUS,
-        "county_poverty_share": COUNTY_POVERTY_SHARE,
-    }
-    for field, codes in allowed.items():
+    for field, codes in CODEBOOK_FIELDS.items():
         if field not in inputs:
             raise ValueError(f"'{field}' is required")
         try:
