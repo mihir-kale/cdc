@@ -28,9 +28,19 @@ TOKENS = {
     "border": "#E4E7EC",
     "border_strong": "#D0D5DD",
     # Brand / interactive
-    "primary": "#3157D5",
-    "primary_hover": "#2646B2",
-    "primary_soft": "#EFF4FF",
+    # Two teals, one hue family. `primary` is the readable teal and carries
+    # everything that has to pass contrast: white text on it, or teal text on the
+    # page. `accent` is the brand teal, used where it is a large mark rather than
+    # a background for text.
+    #
+    # The brand teal on its own does not pass: #26A8D6 is 2.74:1 against white
+    # and 2.58:1 as text on the #F7F8FA page, both short of the 4.5:1 needed for
+    # body text. Deriving #0E7490 from the same hue gives 5.36:1 and 5.04:1, so
+    # the interface stays legible while still reading as teal.
+    "primary": "#0E7490",
+    "primary_hover": "#0A5F76",
+    "primary_soft": "#E6F3F8",
+    "accent": "#26A8D6",
     # Status
     "success": "#16794B",
     "warning": "#B54708",
@@ -45,9 +55,20 @@ TOKENS = {
     "pad": "32px",
     "pad_mobile": "16px",
     "tap": "44px",
+    # Two families. Titillium Web carries body copy, Montserrat carries headings
+    # and the wordmark. Both are declared as [[theme.fontFaces]] in
+    # .streamlit/config.toml and served from static/fonts/, not fetched from a
+    # CDN: Streamlit strips @import from injected HTML, and a page showing
+    # household financial details should not call a font CDN on every view. The
+    # system stack behind each is the fallback if the files never arrive, so a
+    # blocked or slow request degrades to something legible.
     "font": (
-        "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', "
-        "Arial, 'Noto Sans', sans-serif"
+        "'Titillium Web', -apple-system, BlinkMacSystemFont, 'Segoe UI', "
+        "Roboto, 'Helvetica Neue', Arial, sans-serif"
+    ),
+    "font_display": (
+        "'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', "
+        "Roboto, 'Helvetica Neue', Arial, sans-serif"
     ),
 }
 
@@ -79,7 +100,8 @@ padding: 3.25rem 1.5rem{t['pad']} 1.5rem;
 @media (max-width: 768px) {{
 .block-container{{ padding: 2.5rem 1rem 2rem 1rem; }}
 }}
-h1, h2, h3, h4, h5, h6, p, label, span, div, button, input, li, td, th{{
+h1, h2, h3, h4, h5, h6{{ font-family:{t['font_display']}; }}
+p, label, span, div, button, input, textarea, li, td, th{{
 font-family:{t['font']};
 }}
 /* Nothing may introduce sideways scroll at 375px. Long lender names and the
@@ -276,9 +298,21 @@ outline: 3px solid{t['primary']}; outline-offset: -2px;
 [data-testid="stAlert"] p{{ font-size: .9rem; line-height: 1.5; }}
 
 /* ------------------------------------------------------- kyl components */
-/* Wordmark. The one place a serif is allowed. */
+/* Masthead: the logo sits above the wordmark, small and left.
+   static/kyl-logo.png is the source artwork trimmed to its content and scaled to
+   2x this size. Trimming matters: the original is 674x598 with the mark in a
+   287x234 box, so rendering the file as-is at this size would draw the mark at
+   roughly a third of it and leave a speck. Re-measure and re-trim if the source
+   artwork is replaced. */
+.kyl-brand {{
+  display: block; margin: 0 0 .3rem; line-height: 0;
+}}
+.kyl-logo {{
+  display: block; width: 1.85rem; height: 1.5rem; object-fit: contain;
+}}
+/* Wordmark. The heaviest use of the display face. */
 .kyl-mark{{
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family:{t['font_display']};
   font-size: 2.5rem; font-weight: 700; letter-spacing: -.02em;
 color:{t['text']}; line-height: 1.1; margin: 0;
 }}
@@ -463,7 +497,7 @@ height: .7rem; background:{t['bg']}; border: 1px solid {t['border']};
   border-radius: 999px; overflow: hidden; display: block;
 }}
 /* A non-zero share must not render as nothing. Exact values sit beside it. */
-.kyl-cbar-fill{{ display: block; height: 100%; background: #6B8AFD; min-width: 2px; }}
+.kyl-cbar-fill{{ display: block; height: 100%; background: {t['accent']}; min-width: 2px; }}
 .kyl-cvalue{{
 font-size: .85rem; color:{t['muted']}; text-align: right;
   font-variant-numeric: tabular-nums; white-space: nowrap;

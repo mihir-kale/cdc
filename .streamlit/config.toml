@@ -5,18 +5,66 @@
 # button fill and focus rings from this one value, so it has to be a real colour.
 # The font was Spectral (a serif) at baseFontSize 17, and secondaryBackgroundColor
 # was a pale blue that filled every input. All three are corrected here; the
-# design tokens in app.py mirror these values.
+# design tokens in kyl_theme.py mirror these values.
+#
+# The typeface is now Titillium Web, with Montserrat for headings. The webfont
+# itself is loaded by an @import in kyl_theme.stylesheet(), because this file can
+# only name one family; the name here keeps Streamlit's own defaults consistent
+# so a widget does not render in a different face from the page around it.
+#
+# primaryColor is a deeper teal than the brand teal (#26A8D6) on purpose. Streamlit
+# derives button fills, focus rings and selected states from this value and puts
+# white text on them, and #26A8D6 is only 2.74:1 against white. #0E7490 is the same
+# hue at 5.36:1.
 #
 # Tokens: see TOKENS in app.py. Keep the two in step.
 
 [theme]
 base = "light"
-primaryColor = "#3157D5"
+primaryColor = "#0E7490"
 backgroundColor = "#F7F8FA"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#101828"
-font = "sans serif"
+font = "Titillium Web"
 
 # 16px base keeps body copy at the intended 15-16px once Streamlit's own
 # line-height is applied; the previous 17px was oversized against a serif.
 baseFontSize = 16
+
+# --- static files -----------------------------------------------------------
+# Off by default in Streamlit. Nothing under static/ is reachable without it, so
+# the self-hosted webfonts below 404 and the page silently falls back to the
+# system face. This is the switch that makes them load.
+[server]
+enableStaticServing = true
+
+# The two typefaces, hosted from static/fonts/ rather than fetched from a font
+# CDN. Declared here instead of as @font-face in the stylesheet because
+# Streamlit strips @import from injected HTML but serves these itself, and
+# because a page showing household financial details should not be making a
+# third-party request on every view.
+#
+# Montserrat ships as one variable file covering 500-700.
+[[theme.fontFaces]]
+family = "Titillium Web"
+style = "normal"
+weight = "400"
+url = "app/static/fonts/titillium-web-400.woff2"
+
+[[theme.fontFaces]]
+family = "Titillium Web"
+style = "normal"
+weight = "600"
+url = "app/static/fonts/titillium-web-600.woff2"
+
+[[theme.fontFaces]]
+family = "Titillium Web"
+style = "normal"
+weight = "700"
+url = "app/static/fonts/titillium-web-700.woff2"
+
+[[theme.fontFaces]]
+family = "Montserrat"
+style = "normal"
+weight = "500 700"
+url = "app/static/fonts/montserrat-var.woff2"

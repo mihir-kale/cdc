@@ -998,8 +998,14 @@ st.set_page_config(
 st.markdown(stylesheet(), unsafe_allow_html=True)
 
 # The one place a serif is used: the wordmark.
+# The logo is served from static/, which is only reachable because
+# server.enableStaticServing is on in .streamlit/config.toml. If it ever fails to
+# load the alt text stands in for it, so the masthead never collapses.
 st.html(
     '<header style="margin:0 0 1.5rem">'
+    '<span class="kyl-brand">'
+    '<img class="kyl-logo" src="app/static/kyl-logo.png" alt="" width="30" height="24">'
+    "</span>"
     '<p class="kyl-mark">Know Your Lender</p>'
     '<p class="kyl-tag">Three independent tools for payday-loan questions</p>'
     '<p class="kyl-lede">Explore CFPB complaint patterns, understand a household’s'
